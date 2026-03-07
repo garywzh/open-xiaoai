@@ -1,0 +1,26 @@
+{
+  "name": "open-xiaoai-openclaw",
+  "version": "1.0.0",
+  "description": "小爱音箱接入 OpenClaw",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "cargo-cp-artifact -ac open_xiaoai_server openclaw/open-xiaoai.node -- cargo build --release --message-format=json-render-diagnostics",
+    "start": "tsx openclaw/index.ts",
+    "dev": "pnpm build && pnpm start",
+    "check": "tsc --noEmit",
+    "media:url": "tsx scripts/media-url.ts",
+    "smoke": "tsx scripts/smoke-test.ts"
+  },
+  "devDependencies": {
+    "@neon-rs/cli": "0.1.82",
+    "@types/node": "^22.13.11",
+    "cargo-cp-artifact": "^0.1.9",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  },
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22"
+  }
+}
