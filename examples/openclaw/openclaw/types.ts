@@ -28,8 +28,6 @@ export interface OpenClawBridgeConfig {
     assistantKeywords: string[];
     homeKeywords: string[];
     homePatterns: string[];
-    mediaKeywords: string[];
-    mediaPatterns: string[];
   };
   speaker: {
     ttsBlocking: boolean;
@@ -66,9 +64,8 @@ export type BridgeAction =
     };
 
 export interface RouteDecision {
-  type: "ignore" | "home_control" | "play_url_direct" | "openclaw";
+  type: "ignore" | "home_control" | "openclaw";
   text: string;
-  url?: string;
 }
 
 export interface DebugRunResult {

@@ -51,7 +51,7 @@
    - 👉 [小爱音箱接入小智 AI](examples/xiaozhi/README.md)
    - 👉 [小爱音箱自定义唤醒词](examples/kws/README.md)
    - 👉 [小爱音箱接入 OpenClaw（本地家庭助手 + 工具调用）](examples/openclaw/README.md)
-     - 服务端显式路由：家电/提醒静默委托原生，歌曲/故事默认走 agent
+     - 服务端显式路由：家电/提醒静默委托原生，其余语音默认走 agent
    - 👉 [小爱音箱接入 MiGPT（完美版）](examples/migpt/README.md)
    - 👉 [小爱音箱接入 Gemini Live API](examples/gemini/README.md)
    - 👉 [小爱音箱组立体声（支持不同型号机型）](examples/stereo/README.md)

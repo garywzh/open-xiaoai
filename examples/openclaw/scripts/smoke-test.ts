@@ -48,9 +48,9 @@ async function runRouterChecks(
   assert.equal(song.type, "openclaw");
   assert.equal(song.text, "播放周杰伦的七里香");
 
-  const play = router.decide(`${prefix} 播放 http://127.0.0.1/demo.mp3`);
-  assert.equal(play.type, "play_url_direct");
-  assert.equal(play.url, "http://127.0.0.1/demo.mp3");
+  const audioUrl = router.decide(`${prefix} 播放 http://127.0.0.1/demo.mp3`);
+  assert.equal(audioUrl.type, "openclaw");
+  assert.equal(audioUrl.text, "播放 http://127.0.0.1/demo.mp3");
 
   const ignore = router.decide(prefix);
   assert.equal(ignore.type, "ignore");

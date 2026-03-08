@@ -70,8 +70,6 @@ export const kOpenXiaoAIConfig: OpenClawBridgeConfig = {
     assistantKeywords: envList("OPEN_XIAOAI_ASSISTANT_KEYWORDS", kDefaultAssistantKeywords),
     homeKeywords: envList("OPEN_XIAOAI_HOME_KEYWORDS", kDefaultHomeKeywords),
     homePatterns: envList("OPEN_XIAOAI_HOME_PATTERNS", kDefaultHomePatterns, ";"),
-    mediaKeywords: envList("OPEN_XIAOAI_MEDIA_KEYWORDS", kDefaultMediaKeywords),
-    mediaPatterns: envList("OPEN_XIAOAI_MEDIA_PATTERNS", kDefaultMediaPatterns, ";"),
   },
   speaker: {
     ttsBlocking: envBoolean("OPEN_XIAOAI_TTS_BLOCKING", false),

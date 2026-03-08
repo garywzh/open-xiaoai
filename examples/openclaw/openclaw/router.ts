@@ -1,14 +1,10 @@
 import type { BridgeAction, OpenClawBridgeConfig, RouteDecision } from "./types.js";
 
-const AUDIO_URL_PATTERN = /(https?:\/\/\S+\.(?:mp3|wav|m4a|aac|flac))(?:\?\S*)?/i;
-
 export class BridgeRouter {
   private readonly homePatterns: RegExp[];
-  private readonly mediaPatterns: RegExp[];
 
   constructor(private readonly config: OpenClawBridgeConfig["router"]) {
     this.homePatterns = compilePatterns(config.homePatterns);
-    this.mediaPatterns = compilePatterns(config.mediaPatterns);
   }
 
   decide(text: string): RouteDecision {
@@ -25,16 +21,6 @@ export class BridgeRouter {
       return {
         type: "ignore",
         text: normalizedText,
-      };
-    }
-
-    const matchedAudioUrl = effectiveText.match(AUDIO_URL_PATTERN)?.[1];
-
-    if (matchedAudioUrl && this.matchesMediaRule(effectiveText)) {
-      return {
-        type: "play_url_direct",
-        text: effectiveText,
-        url: matchedAudioUrl,
       };
     }
 
@@ -75,10 +61,6 @@ export class BridgeRouter {
 
   private matchesHomeRule(text: string) {
     return this.matchesPattern(text, this.homePatterns) || this.includesAny(text, this.config.homeKeywords);
-  }
-
-  private matchesMediaRule(text: string) {
-    return this.matchesPattern(text, this.mediaPatterns) || this.includesAny(text, this.config.mediaKeywords);
   }
 
   private normalizeBridgeText(text: string) {

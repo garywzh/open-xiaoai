@@ -179,25 +179,6 @@ export class OpenClawBridge {
       };
     }
 
-    if (decision.type === "play_url_direct" && decision.url) {
-      if (execute) {
-        const stageStartedAt = Date.now();
-        await OpenXiaoAISpeaker.play({ url: decision.url });
-        this.logTrace(trace, `play_url_done cost=${Date.now() - stageStartedAt}ms`);
-      }
-      this.logTrace(trace, "done");
-      return {
-        input: text,
-        routedAs: decision.type,
-        normalizedText: decision.text,
-        action: {
-          action: "play_url",
-          url: decision.url,
-        },
-        executed: execute,
-      };
-    }
-
     const messages = this.buildMessages(decision.text);
     this.logTrace(trace, `openclaw_request_start messages=${messages.length}`);
     const llmStartedAt = Date.now();
@@ -292,7 +273,7 @@ export class OpenClawBridge {
     };
   }
 
-  private async prepareBridgeCommand(routeType: "home_control" | "play_url_direct" | "openclaw") {
+  private async prepareBridgeCommand(routeType: "home_control" | "openclaw") {
     if (!this.config.speaker.abortXiaoAIOnOpenClaw) {
       return;
     }
