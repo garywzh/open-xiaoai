@@ -1,6 +1,6 @@
 ﻿import type { OpenClawBridgeConfig } from "./openclaw/types.js";
 
-const kDefaultAssistantKeywords = ["问问龙虾", "请问龙虾", "召唤龙虾"];
+const kDefaultAssistantKeywords = ["请", "问问小爱", "小爱帮忙"];
 const kDefaultHomeKeywords = [
   "打开",
   "关闭",
@@ -23,7 +23,7 @@ const kDefaultHomePatterns = [
   "^(把)?(.+)?(调到|设置成).+$",
   "^(让|叫).*(回充|回去充电)$",
 ];
-const kDefaultMediaKeywords = ["播放", "来一首", "来点", "听", "放一段"];
+const kDefaultMediaKeywords = ["播放", "来一首", "来点", "听", "放一段", "暂停", "继续播放", "下一首", "上一首", "音量", "闹钟", "提醒"];
 const kDefaultMediaPatterns = [
   "^(播放|来一首|来点|听).+",
   "^播放\s+https?://.+\\.(mp3|wav|m4a|aac|flac)(\\?.*)?$",
@@ -45,22 +45,18 @@ export const kOpenXiaoAIConfig: OpenClawBridgeConfig = {
     endpoint: envString("OPENCLAW_ENDPOINT", "/v1/chat/completions"),
     token: envOptionalString("OPENCLAW_TOKEN"),
     model: envString("OPENCLAW_MODEL", "openclaw"),
-    agentId: envString("OPENCLAW_AGENT_ID", "main"),
-    sessionUser: envString("OPENCLAW_SESSION_USER", "xiaoai-bridge-main"),
+    agentId: envString("OPENCLAW_AGENT_ID", "xiaoai"),
+    sessionUser: envString("OPENCLAW_SESSION_USER", "xiaoai-bridge-family"),
     sessionKey: envOptionalString("OPENCLAW_SESSION_KEY"),
     timeoutMs: envNumber("OPENCLAW_TIMEOUT_MS", 30_000),
     temperature: envNumber("OPENCLAW_TEMPERATURE", 0.3),
-    historyMaxLength: envNumber("OPENCLAW_HISTORY_MAX_LENGTH", 8),
+    historyMaxLength: envNumber("OPENCLAW_HISTORY_MAX_LENGTH", 0),
     systemPrompt: [
-      "你是运行在局域网 OpenClaw 上的中文语音助手。",
-      "你的回复将通过小爱音箱播报。",
-      "如果只是正常回答，请返回纯文本，尽量简洁。",
-      "如果你明确要让音箱执行动作，只返回单个 JSON 对象，不要加 markdown 代码块。",
-      "允许的 JSON 格式：",
-      '{"action":"reply_text","text":"要播报的内容"}',
-      '{"action":"play_file","file":"demo/example.mp3"}',
-      '{"action":"play_url","url":"http://局域网可访问的音频地址.mp3"}',
-      '{"action":"ask_xiaoai","text":"打开客厅灯"}',
+      "你是家里小爱音箱里的本地家庭语音助手桥接会话。",
+      "你的最终文本会被桥接直接播报，请默认用简短、自然、适合口语的中文回答。",
+      "你可以直接回答，也可以调用真实可用的工具来控制音箱、本地媒体或委托原生小爱。",
+      "如果某个工具已经完成了用户可感知的动作，而且不需要你再补充播报，请只回复 NO_REPLY。",
+      "除非用户明确要求，否则不要输出 JSON、代码块、工具名或内部说明。",
     ].join("\n"),
     extraHeaders: {},
   },

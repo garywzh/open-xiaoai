@@ -115,11 +115,16 @@ impl RPC {
             payload,
         };
 
-        send_request(request).await?;
-
         {
             let mut pending = self.pending_requests.lock().await;
             pending.insert(uid.clone(), tx);
+        }
+
+        if let Err(error) = send_request(request).await {
+            let error = error.to_string();
+            let mut pending = self.pending_requests.lock().await;
+            pending.remove(&uid);
+            return Err(error.into());
         }
 
         let timeout_duration = Duration::from_millis(timeout_millis.unwrap_or(10 * 1000));

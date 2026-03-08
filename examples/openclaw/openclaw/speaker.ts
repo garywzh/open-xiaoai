@@ -32,7 +32,7 @@ class SpeakerManager {
     const res = await this.runShell(
       playing ? "mphelper play" : "mphelper pause"
     );
-    return res?.stdout.includes('"code": 0');
+    return hasSuccessCode(res?.stdout);
   }
 
   /**
@@ -113,7 +113,7 @@ class SpeakerManager {
         ubus call pnshelper event_notify '{"src":3, "event":8}'
     `;
     const res = await this.runShell(command);
-    return res?.stdout.includes('"code": 0');
+    return hasSuccessCode(res?.stdout);
   }
 
   /**
@@ -136,7 +136,7 @@ class SpeakerManager {
         nlp_text: text,
       })}'`
     );
-    return res?.stdout.includes('"code": 0');
+    return hasSuccessCode(res?.stdout);
   }
 
   /**
@@ -204,7 +204,7 @@ class SpeakerManager {
         ? `ubus -t1 -S call pnshelper event_notify '{"src":3, "event":7}' 2>&1`
         : `ubus -t1 -S call pnshelper event_notify '{"src":3, "event":8}' 2>&1`
     );
-    return res?.stdout.includes('"code":0');
+    return hasSuccessCode(res?.stdout);
   }
 
   /**
@@ -232,6 +232,10 @@ class SpeakerManager {
 }
 
 export const OpenXiaoAISpeaker = new SpeakerManager();
+
+function hasSuccessCode(stdout?: string) {
+  return /"code"\s*:\s*0/.test(stdout ?? "");
+}
 
 function jsonEncode(value: unknown) {
   return JSON.stringify(value);

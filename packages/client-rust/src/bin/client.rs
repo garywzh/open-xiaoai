@@ -1,7 +1,14 @@
 use open_xiaoai::services::audio::config::AudioConfig;
+use open_xiaoai::services::monitor::file::FileMonitorEvent;
+use open_xiaoai::services::monitor::instruction::{InstructionMonitor, LogMessage, Payload};
 use open_xiaoai::services::monitor::kws::KwsMonitor;
+use open_xiaoai::services::monitor::playing::PlayingMonitor;
 use serde_json::json;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::fs;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 
@@ -13,13 +20,17 @@ use open_xiaoai::services::connect::data::{Event, Request, Response, Stream};
 use open_xiaoai::services::connect::handler::MessageHandler;
 use open_xiaoai::services::connect::message::{MessageManager, WsStream};
 use open_xiaoai::services::connect::rpc::RPC;
-use open_xiaoai::services::monitor::instruction::InstructionMonitor;
-use open_xiaoai::services::monitor::playing::PlayingMonitor;
+
+const DEFAULT_NATIVE_WHITELIST_KEYWORDS: &[&str] = &["灯", "空调", "窗帘", "电视", "加湿器", "风扇", "插座", "净化器", "米家", "回充", "扫地", "播放", "来一首", "来点", "听", "放一段", "暂停", "继续播放", "下一首", "上一首", "音量", "闹钟", "提醒"];
+const NATIVE_WHITELIST_FILE_PATH: &str = "/data/open-xiaoai/native_whitelist.txt";
+const SUPPRESSED_DIALOG_TTL: Duration = Duration::from_secs(15);
+const COMMON_WAKE_PREFIXES: &[&str] = &["小爱同学", "小爱", "你好小爱", "嗨小爱"];
 
 struct AppClient {
     kws_monitor: KwsMonitor,
     instruction_monitor: InstructionMonitor,
     playing_monitor: PlayingMonitor,
+    reply_suppressor: LocalReplySuppressor,
 }
 
 impl AppClient {
@@ -28,6 +39,7 @@ impl AppClient {
             kws_monitor: KwsMonitor::new(),
             instruction_monitor: InstructionMonitor::new(),
             playing_monitor: PlayingMonitor::new(),
+            reply_suppressor: LocalReplySuppressor::new(),
         }
     }
 
@@ -71,11 +83,16 @@ impl AppClient {
         rpc.add_command("start_recording", start_recording).await;
         rpc.add_command("stop_recording", stop_recording).await;
 
+        let reply_suppressor = self.reply_suppressor.clone();
         self.instruction_monitor
-            .start(|event| async move {
-                MessageManager::instance()
-                    .send_event("instruction", Some(json!(event)))
-                    .await
+            .start(move |event| {
+                let reply_suppressor = reply_suppressor.clone();
+                async move {
+                    reply_suppressor.on_instruction_event(&event).await;
+                    MessageManager::instance()
+                        .send_event("instruction", Some(json!(event)))
+                        .await
+                }
             })
             .await;
 
@@ -103,7 +120,235 @@ impl AppClient {
         self.instruction_monitor.stop().await;
         self.playing_monitor.stop().await;
         self.kws_monitor.stop().await;
+        self.reply_suppressor.clear().await;
     }
+}
+
+struct DialogTrace {
+    recognized_at: Instant,
+    text: String,
+}
+
+#[derive(Clone)]
+struct LocalReplySuppressor {
+    native_whitelist_keywords: Arc<Vec<String>>,
+    dialogs: Arc<Mutex<HashMap<String, DialogTrace>>>,
+}
+
+impl LocalReplySuppressor {
+    fn new() -> Self {
+        let native_whitelist_keywords = Arc::new(load_native_whitelist_keywords());
+        println!("✅ 原生白名单关键词: {:?}", native_whitelist_keywords);
+        Self {
+            native_whitelist_keywords,
+            dialogs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    async fn on_instruction_event(&self, event: &FileMonitorEvent) {
+        match event {
+            FileMonitorEvent::NewFile => {
+                self.clear().await;
+            }
+            FileMonitorEvent::NewLine(line) => {
+                self.handle_instruction_line(line).await;
+            }
+        }
+    }
+
+    async fn handle_instruction_line(&self, line: &str) {
+        self.cleanup().await;
+
+        let Ok(message) = serde_json::from_str::<LogMessage>(line) else {
+            return;
+        };
+
+        let dialog_id = message.header.dialog_id.trim();
+        if dialog_id.is_empty() {
+            return;
+        }
+
+        match message.payload {
+            Payload::RecognizeResultPayload { results, .. } => {
+                let text = results
+                    .first()
+                    .map(|item| item.text.trim())
+                    .unwrap_or_default();
+                if self.should_bridge_text(text) {
+                    println!("⏱️ [client] asr_final dialog={} text={}", dialog_id, text);
+                    let mut dialogs = self.dialogs.lock().await;
+                    dialogs.insert(
+                        dialog_id.to_string(),
+                        DialogTrace {
+                            recognized_at: Instant::now(),
+                            text: text.to_string(),
+                        },
+                    );
+                }
+            }
+            Payload::SpeakPayload { .. } | Payload::PlayPayload { .. } => {
+                let dialog_trace = {
+                    let mut dialogs = self.dialogs.lock().await;
+                    dialogs.remove(dialog_id)
+                };
+
+                if let Some(dialog_trace) = dialog_trace {
+                    let elapsed_since_asr = dialog_trace.recognized_at.elapsed().as_millis();
+                    let dialog_id = dialog_id.to_string();
+                    let text = dialog_trace.text;
+                    println!(
+                        "⏱️ [client] native_reply_detected dialog={} since_asr={}ms text={}",
+                        dialog_id, elapsed_since_asr, text
+                    );
+                    tokio::spawn(async move {
+                        let interrupt_started_at = Instant::now();
+                        match interrupt_xiaoai_local().await {
+                            Ok(_) => println!(
+                                "⏱️ [client] local_interrupt_done dialog={} cmd={}ms since_asr={}ms text={}",
+                                dialog_id,
+                                interrupt_started_at.elapsed().as_millis(),
+                                elapsed_since_asr,
+                                text
+                            ),
+                            Err(error) => eprintln!("❌ 本地拦截失败 dialog={}: {}", dialog_id, error),
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn clear(&self) {
+        self.dialogs.lock().await.clear();
+    }
+
+    async fn cleanup(&self) {
+        let mut dialogs = self.dialogs.lock().await;
+        dialogs.retain(|_, trace| trace.recognized_at.elapsed() < SUPPRESSED_DIALOG_TTL);
+    }
+
+    fn should_bridge_text(&self, text: &str) -> bool {
+        let normalized = normalize_text(text);
+        if normalized.is_empty() {
+            return false;
+        }
+
+        let candidates = [normalized.clone(), strip_wake_prefixes(&normalized)];
+
+        candidates.iter().any(|candidate| {
+            if candidate.is_empty() {
+                return false;
+            }
+
+            !self.matches_native_whitelist(candidate)
+        })
+    }
+
+    fn matches_native_whitelist(&self, text: &str) -> bool {
+        self.native_whitelist_keywords.iter().any(|keyword| {
+            let keyword = normalize_text(keyword);
+            !keyword.is_empty() && text.contains(keyword.as_str())
+        })
+    }
+}
+
+fn normalize_text(text: &str) -> String {
+    text.chars()
+        .filter(|ch| {
+            !ch.is_whitespace()
+                && !matches!(
+                    ch,
+                    '，' | '。' | '？' | '！' | '、' | '：' | '；' | ',' | '.' | '?' | '!'
+                        | ':' | ';' | '"' | '\'' | '“' | '”' | '‘' | '’' | '（' | '）'
+                        | '(' | ')'
+                )
+        })
+        .collect()
+}
+
+fn strip_wake_prefixes(text: &str) -> String {
+    let mut normalized = text.to_string();
+
+    loop {
+        let mut changed = false;
+        for prefix in COMMON_WAKE_PREFIXES {
+            let prefix = normalize_text(prefix);
+            if normalized.starts_with(&prefix) {
+                normalized = normalized[prefix.len()..].to_string();
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    normalized
+}
+
+fn load_native_whitelist_keywords() -> Vec<String> {
+    let raw = std::env::var("OPEN_XIAOAI_NATIVE_WHITELIST")
+        .ok()
+        .or_else(|| fs::read_to_string(NATIVE_WHITELIST_FILE_PATH).ok())
+        .unwrap_or_else(|| DEFAULT_NATIVE_WHITELIST_KEYWORDS.join(","));
+
+    let keywords = parse_keywords(&raw);
+    if keywords.is_empty() {
+        DEFAULT_NATIVE_WHITELIST_KEYWORDS
+            .iter()
+            .map(|item| item.to_string())
+            .collect()
+    } else {
+        keywords
+    }
+}
+
+fn parse_keywords(raw: &str) -> Vec<String> {
+    raw.replace(['\n', '\r'], ",")
+        .split(',')
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_string())
+        .collect()
+}
+
+fn summarize_script(script: &str) -> String {
+    let single_line = script
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ; ");
+
+    let summary = if single_line.is_empty() {
+        script.trim().to_string()
+    } else {
+        single_line
+    };
+
+    if summary.chars().count() <= 120 {
+        summary
+    } else {
+        let mut trimmed = summary.chars().take(120).collect::<String>();
+        trimmed.push_str("...");
+        trimmed
+    }
+}
+
+async fn interrupt_xiaoai_local() -> Result<(), AppError> {
+    open_xiaoai::utils::shell::run_shell(
+        r#"
+            mphelper pause >/dev/null 2>&1 || true
+            ubus -t1 -S call pnshelper event_notify '{"src":3, "event":7}' >/dev/null 2>&1 || true
+            sleep 0.1
+            ubus -t1 -S call pnshelper event_notify '{"src":3, "event":8}' >/dev/null 2>&1 || true
+            (/etc/init.d/mico_aivs_lab restart >/dev/null 2>&1 &) || true
+            exit 0
+        "#,
+    )
+    .await?;
+    Ok(())
 }
 
 async fn get_version(_: Request) -> Result<Response, AppError> {
@@ -151,7 +396,16 @@ async fn run_shell(request: Request) -> Result<Response, AppError> {
         Some(payload) => serde_json::from_value::<String>(payload)?,
         _ => return Err("empty command".into()),
     };
+    let started_at = Instant::now();
+    let summary = summarize_script(&script);
+    println!("⏱️ [client] rpc_run_shell_start script={}", summary);
     let res = open_xiaoai::utils::shell::run_shell(script.as_str()).await?;
+    println!(
+        "⏱️ [client] rpc_run_shell_done cost={}ms exit_code={} script={}",
+        started_at.elapsed().as_millis(),
+        res.exit_code,
+        summary
+    );
     Ok(Response::from_data(json!(res)))
 }
 
@@ -163,7 +417,6 @@ async fn on_event(event: Event) -> Result<(), AppError> {
 async fn on_stream(stream: Stream) -> Result<(), AppError> {
     let Stream { tag, bytes, .. } = stream;
     if tag.as_str() == "play" {
-        // 播放接收到的音频流
         let _ = AudioPlayer::instance().play(bytes).await;
     }
     Ok(())

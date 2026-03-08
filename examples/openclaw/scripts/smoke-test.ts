@@ -34,20 +34,21 @@ async function runRouterChecks(
   config: Awaited<typeof import("../config.js")>["kOpenXiaoAIConfig"],
 ) {
   const router = new BridgeRouter(config.router);
+  const prefix = config.router.assistantKeywords[0] ?? "请";
 
-  const weather = router.decide("问问龙虾 今天上海天气怎么样");
+  const weather = router.decide(`${prefix} 今天上海天气怎么样`);
   assert.equal(weather.type, "openclaw");
   assert.equal(weather.text, "今天上海天气怎么样");
 
-  const home = router.decide("召唤龙虾 打开客厅灯");
-  assert.equal(home.type, "home_control");
+  const home = router.decide(`${prefix} 打开客厅灯`);
+  assert.equal(home.type, "ignore");
   assert.equal(home.text, "打开客厅灯");
 
-  const play = router.decide("请问龙虾 播放 http://127.0.0.1/demo.mp3");
+  const play = router.decide(`${prefix} 播放 http://127.0.0.1/demo.mp3`);
   assert.equal(play.type, "play_url_direct");
   assert.equal(play.url, "http://127.0.0.1/demo.mp3");
 
-  const ignore = router.decide(config.router.assistantKeywords[0] ?? "问问龙虾");
+  const ignore = router.decide(prefix);
   assert.equal(ignore.type, "ignore");
 
   console.log("✓ router checks");
@@ -98,6 +99,9 @@ function runActionChecks(
     action: "reply_text",
     text: "普通文本回复",
   });
+  assert.deepEqual(client.normalizeAction("NO_REPLY"), {
+    action: "no_reply",
+  });
 
   console.log("✓ action checks");
 }
@@ -116,7 +120,7 @@ async function runLiveApiChecks(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      text: "问问龙虾 今天上海天气怎么样",
+      text: `${config.router.assistantKeywords[0] ?? "请"} 今天上海天气怎么样`,
       execute: false,
     }),
   });

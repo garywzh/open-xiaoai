@@ -26,6 +26,7 @@ type XiaoAIEvent = {
 
 type RecognizeLine = {
   header?: {
+    dialog_id?: string;
     namespace?: string;
     name?: string;
   };
@@ -37,11 +38,25 @@ type RecognizeLine = {
   };
 };
 
+
+type RecognizedCommand = {
+  dialogId?: string;
+  text: string;
+};
+
+type TraceContext = {
+  id: string;
+  dialogId?: string;
+  input: string;
+  startedAt: number;
+};
+
 export class OpenClawBridge {
   private readonly client: OpenClawClient;
   private readonly router: BridgeRouter;
   private readonly history: BridgeMessage[] = [];
   private readonly seenTexts = new Map<string, number>();
+  private traceSeq = 0;
 
   constructor(private readonly config: OpenClawBridgeConfig) {
     this.client = new OpenClawClient(config.openclaw);
@@ -90,32 +105,40 @@ export class OpenClawBridge {
         return;
       }
 
-      const text = extractRecognizedText(lineText);
-      if (!text) {
+      const recognized = extractRecognizedText(lineText);
+      if (!recognized) {
         return;
       }
 
-      await this.handleRecognizedText(text);
+      await this.handleRecognizedText(recognized);
     }
   };
 
-  private async handleRecognizedText(text: string) {
+  private async handleRecognizedText(recognized: RecognizedCommand) {
+    const { dialogId, text } = recognized;
+    const trace = this.createTrace(text, dialogId);
+    this.logTrace(trace, "received_final_asr");
+
     const previousAt = this.seenTexts.get(text);
     if (this.router.shouldDedupe(previousAt)) {
+      this.logTrace(trace, "deduped_skip");
       return;
     }
     this.seenTexts.set(text, Date.now());
 
     console.log(`🔥 收到指令: ${text}`);
 
-    await this.runText(text);
+    await this.runText(text, { trace });
   }
 
-  async runText(text: string, options?: { execute?: boolean }): Promise<DebugRunResult> {
+  async runText(text: string, options?: { execute?: boolean; trace?: TraceContext }): Promise<DebugRunResult> {
     const execute = options?.execute ?? true;
+    const trace = options?.trace ?? this.createTrace(text);
     const decision = this.router.decide(text);
+    this.logTrace(trace, `route type=${decision.type}`);
 
     if (decision.type === "ignore") {
+      this.logTrace(trace, "ignore");
       return {
         input: text,
         routedAs: decision.type,
@@ -125,13 +148,18 @@ export class OpenClawBridge {
     }
 
     if (execute) {
+      const stageStartedAt = Date.now();
       await this.prepareBridgeCommand(decision.type);
+      this.logTrace(trace, `prepare_bridge_done cost=${Date.now() - stageStartedAt}ms`);
     }
 
     if (decision.type === "home_control") {
       if (execute) {
+        const stageStartedAt = Date.now();
         await OpenXiaoAISpeaker.askXiaoAI(decision.text);
+        this.logTrace(trace, `ask_xiaoai_done cost=${Date.now() - stageStartedAt}ms`);
       }
+      this.logTrace(trace, "done");
       return {
         input: text,
         routedAs: decision.type,
@@ -146,8 +174,11 @@ export class OpenClawBridge {
 
     if (decision.type === "play_url_direct" && decision.url) {
       if (execute) {
+        const stageStartedAt = Date.now();
         await OpenXiaoAISpeaker.play({ url: decision.url });
+        this.logTrace(trace, `play_url_done cost=${Date.now() - stageStartedAt}ms`);
       }
+      this.logTrace(trace, "done");
       return {
         input: text,
         routedAs: decision.type,
@@ -161,13 +192,20 @@ export class OpenClawBridge {
     }
 
     const messages = this.buildMessages(decision.text);
+    this.logTrace(trace, `openclaw_request_start messages=${messages.length}`);
+    const llmStartedAt = Date.now();
     const reply = await this.client.chat(messages);
+    this.logTrace(trace, `openclaw_reply_done cost=${Date.now() - llmStartedAt}ms chars=${reply.length}`);
     const action = this.client.normalizeAction(reply);
+    this.logTrace(trace, `normalized_action type=${action.action}`);
 
     if (execute) {
+      const stageStartedAt = Date.now();
       await this.executeAction(action, decision.text);
+      this.logTrace(trace, `execute_action_done cost=${Date.now() - stageStartedAt}ms`);
     }
 
+    this.logTrace(trace, "done");
     return {
       input: text,
       routedAs: decision.type,
@@ -175,6 +213,62 @@ export class OpenClawBridge {
       reply,
       action,
       executed: execute,
+    };
+  }
+
+  private createTrace(text: string, dialogId?: string): TraceContext {
+    this.traceSeq += 1;
+    return {
+      id: `${this.traceSeq}`,
+      dialogId,
+      input: text,
+      startedAt: Date.now(),
+    };
+  }
+
+  private logTrace(trace: TraceContext, stage: string) {
+    const elapsed = Date.now() - trace.startedAt;
+    const dialog = trace.dialogId ? ` dialog=${trace.dialogId}` : "";
+    console.log(`⏱️ [bridge#${trace.id}] +${elapsed}ms ${stage}${dialog} text=${trace.input}`);
+  }
+
+  private async interruptCurrentAudio() {
+    const paused = await OpenXiaoAISpeaker.setPlaying(false);
+    const stopped = await OpenXiaoAISpeaker.wakeUp(false);
+
+    if (paused || stopped) {
+      if (paused && stopped) {
+        console.log("⚡️ 已暂停本地播放并软打断小爱");
+        return {
+          ok: true,
+          method: "pause+soft",
+        };
+      }
+
+      if (paused) {
+        console.log("⚡️ 已暂停当前本地播放");
+        return {
+          ok: true,
+          method: "pause",
+        };
+      }
+
+      console.log("⚡️ 软打断小爱成功");
+      return {
+        ok: true,
+        method: "soft",
+      };
+    }
+
+    console.log("⚠️ 软打断失败，回退重启 mico_aivs_lab");
+    const restarted = await OpenXiaoAISpeaker.abortXiaoAI();
+    if (restarted && this.config.speaker.abortRecoveryMs > 0) {
+      await sleep(this.config.speaker.abortRecoveryMs);
+    }
+
+    return {
+      ok: restarted,
+      method: "restart",
     };
   }
 
@@ -187,10 +281,7 @@ export class OpenClawBridge {
       return;
     }
 
-    await OpenXiaoAISpeaker.abortXiaoAI();
-    if (this.config.speaker.abortRecoveryMs > 0) {
-      await sleep(this.config.speaker.abortRecoveryMs);
-    }
+    await this.interruptCurrentAudio();
   }
 
   private buildMessages(text: string): BridgeMessage[] {
@@ -203,8 +294,12 @@ export class OpenClawBridge {
       });
     }
 
-    const history = this.history.slice(-this.config.openclaw.historyMaxLength);
-    messages.push(...history, {
+    if (this.config.openclaw.historyMaxLength > 0) {
+      const history = this.history.slice(-this.config.openclaw.historyMaxLength);
+      messages.push(...history);
+    }
+
+    messages.push({
       role: "user",
       content: text,
     });
@@ -212,6 +307,11 @@ export class OpenClawBridge {
   }
 
   private async executeAction(action: BridgeAction, userText: string) {
+    if (action.action === "no_reply") {
+      this.pushHistory(userText, "NO_REPLY");
+      return;
+    }
+
     if (action.action === "play_url") {
       await OpenXiaoAISpeaker.play({
         url: action.url,
@@ -322,12 +422,58 @@ export class OpenClawBridge {
     }
 
     if (request.method === "GET" && url.pathname === "/api/status") {
+      const speakerStatus = await OpenXiaoAISpeaker.getPlaying(true);
+      const micStatus = await OpenXiaoAISpeaker.getMic();
+      const device = await OpenXiaoAISpeaker.getDevice();
       writeJson(response, 200, {
         ok: true,
-        speakerStatus: OpenXiaoAISpeaker.status,
+        speakerStatus,
+        micStatus,
+        device,
+        agentId: this.config.openclaw.agentId ?? "main",
+        sessionUser: this.config.openclaw.sessionUser,
         historyLength: this.history.length,
         dedupeCacheSize: this.seenTexts.size,
         mediaBaseURL: resolveMediaBaseURL(this.config.media),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/device") {
+      const device = await OpenXiaoAISpeaker.getDevice();
+      writeJson(response, 200, {
+        ok: true,
+        ...device,
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/interrupt") {
+      const result = await this.interruptCurrentAudio();
+      const speakerStatus = await OpenXiaoAISpeaker.getPlaying(true);
+      writeJson(response, 200, {
+        ...result,
+        speakerStatus,
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/pause") {
+      const ok = await OpenXiaoAISpeaker.setPlaying(false);
+      const speakerStatus = await OpenXiaoAISpeaker.getPlaying(true);
+      writeJson(response, 200, {
+        ok,
+        speakerStatus,
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/resume") {
+      const ok = await OpenXiaoAISpeaker.setPlaying(true);
+      const speakerStatus = await OpenXiaoAISpeaker.getPlaying(true);
+      writeJson(response, 200, {
+        ok,
+        speakerStatus,
       });
       return;
     }
@@ -377,8 +523,13 @@ export class OpenClawBridge {
         writeJson(response, 400, { error: "text is required" });
         return;
       }
-      await OpenXiaoAISpeaker.play({ text: body.text });
-      writeJson(response, 200, { ok: true });
+      const ok = await OpenXiaoAISpeaker.play({ text: body.text });
+      const speakerStatus = await OpenXiaoAISpeaker.getPlaying(true);
+      writeJson(response, 200, {
+        ok,
+        text: body.text,
+        speakerStatus,
+      });
       return;
     }
 
@@ -388,19 +539,29 @@ export class OpenClawBridge {
         writeJson(response, 400, { error: "url is required" });
         return;
       }
-      await OpenXiaoAISpeaker.play({ url: body.url });
-      writeJson(response, 200, { ok: true });
+      const ok = await OpenXiaoAISpeaker.play({ url: body.url });
+      const speakerStatus = await OpenXiaoAISpeaker.getPlaying(true);
+      writeJson(response, 200, {
+        ok,
+        url: body.url,
+        speakerStatus,
+      });
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/ask-xiaoai") {
-      const body = await readJsonBody<{ text?: string }>(request);
+      const body = await readJsonBody<{ text?: string; silent?: boolean }>(request);
       if (!body.text?.trim()) {
         writeJson(response, 400, { error: "text is required" });
         return;
       }
-      await OpenXiaoAISpeaker.askXiaoAI(body.text);
-      writeJson(response, 200, { ok: true });
+      const silent = body.silent ?? false;
+      const ok = await OpenXiaoAISpeaker.askXiaoAI(body.text, { silent });
+      writeJson(response, 200, {
+        ok,
+        text: body.text,
+        silent,
+      });
       return;
     }
 
@@ -467,7 +628,7 @@ function extractInstructionLine(data: unknown) {
   return typeof maybeLine === "string" ? maybeLine : undefined;
 }
 
-function extractRecognizedText(lineText: string) {
+function extractRecognizedText(lineText: string): RecognizedCommand | undefined {
   let line: RecognizeLine;
   try {
     line = JSON.parse(lineText) as RecognizeLine;
@@ -488,5 +649,12 @@ function extractRecognizedText(lineText: string) {
   }
 
   const text = line.payload.results?.[0]?.text?.trim();
-  return text || undefined;
+  if (!text) {
+    return undefined;
+  }
+
+  return {
+    dialogId: line.header?.dialog_id,
+    text,
+  };
 }

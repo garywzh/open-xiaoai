@@ -38,6 +38,46 @@ curl -L -o /data/init.sh https://gitee.com/idootop/artifacts/releases/download/o
 reboot
 ```
 
+## 原生白名单与抢话拦截
+
+现在的 Rust Client 不只是“被动转发”，还会在设备侧做一层很关键的辅助逻辑：
+
+- 记录最终 ASR 文本
+- 如果文本**不在原生白名单**里，而原生小爱又开始播报/播放
+- Client 会在设备侧尝试立刻打断原生回复，让桥接服务继续接管
+
+原生白名单的读取顺序：
+
+1. 环境变量 `OPEN_XIAOAI_NATIVE_WHITELIST`
+2. 文件 `/data/open-xiaoai/native_whitelist.txt`
+3. 内置默认关键词
+
+默认白名单主要覆盖：
+
+- 灯、空调、窗帘、电视等家居控制
+- 播放、暂停、继续播放、上一首、下一首、音量
+- 闹钟、提醒
+
+如果你想自定义，可以在音箱上创建：
+
+```shell
+cat > /data/open-xiaoai/native_whitelist.txt <<'EOF'
+灯
+空调
+窗帘
+米家
+播放
+暂停
+继续播放
+闹钟
+提醒
+EOF
+```
+
+> [!TIP]
+> 白名单越宽，原生小爱保留得越多；白名单越窄，桥接服务接管得越多。
+> 家庭环境里建议先保守一些，再逐步收窄。
+
 ## 编译运行
 
 > [!TIP]

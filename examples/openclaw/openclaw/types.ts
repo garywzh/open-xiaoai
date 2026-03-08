@@ -60,6 +60,9 @@ export type BridgeAction =
   | {
       action: "ask_xiaoai";
       text: string;
+    }
+  | {
+      action: "no_reply";
     };
 
 export interface RouteDecision {

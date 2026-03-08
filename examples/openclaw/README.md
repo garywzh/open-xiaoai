@@ -1,469 +1,364 @@
-﻿# Open-XiaoAI x OpenClaw
+# Open-XiaoAI x OpenClaw
 
-让小爱音箱通过局域网桥接到本地部署的 OpenClaw，同时保留原生小爱在语音识别、文字转语音和米家控制上的优势。
+这个示例把 **Root 后的小爱音箱** 接到 **本地 OpenClaw Gateway**，做成一个面向家庭场景的语音助手桥接层。
 
-## 目标
+它的定位不是“把音箱变成另一台电脑”，而是：
 
-本示例的目标分为三部分：
+- 大部分自由问答、陪聊、简单知识问答，交给 OpenClaw 里的 `xiaoai` agent
+- 家居控制、原生音乐生态、闹钟提醒等高确定性能力，优先保留给原生小爱
+- 本地音频播放、打断、状态查询等能力，通过 OpenClaw 插件工具调用
+- 当工具已经完成动作时，用 `NO_REPLY` 避免桥接再次重复播报
 
-1. 用户对小爱音箱说话后，可以把文本消息交给 OpenClaw 对话。
-2. OpenClaw 可以让小爱音箱播放指定的 MP3 / 音频链接。
-3. OpenClaw 或桥接服务可以继续控制米家设备。
+## 当前架构
 
-## 配置方式
+当前推荐方案一共 4 层：
 
-当前支持两种方式：
+1. **音箱 Client（Rust）**
+   - 负责连接音箱与桥接服务
+   - 监听 ASR / 播放事件
+   - 在设备侧尽早打断原生小爱的“抢话”回复
+2. **桥接服务（本目录）**
+   - 接收音箱事件
+   - 做去重、路由、打断、媒体服务、调试 API
+   - 把文本请求转给 OpenClaw
+3. **OpenClaw `xiaoai` agent**
+   - 通过 `AGENTS.md` / `SOUL.md` / `TOOLS.md` / `USER.md` 定义家庭语音助手行为
+4. **OpenClaw 插件工具**
+   - 由 `xiaoai-tools-plugin/` 提供可选工具
+   - 例如 `xiaoai_interrupt`、`xiaoai_speak`、`xiaoai_device_info`
 
-1. 直接修改 `config.ts`
-2. 使用环境变量覆盖默认值
+## 功能特点
 
-推荐做法：
+- **默认接管自由问答**：更适合家庭问答、儿童场景、短对话
+- **原生白名单保留**：家居控制、闹钟提醒、原生播放等可继续走原生小爱
+- **设备侧抢话拦截**：Client 发现原生回复开始播报时，会本地尝试打断
+- **插件工具调用**：`xiaoai` agent 可以主动打断、播报、播放本地音频、查设备信息
+- **静默收尾**：工具完成动作后，返回 `NO_REPLY`，避免二次播报
 
-- 复制 `examples/openclaw/.env.example` 为你自己的本地环境文件
-- 启动脚本会自动按顺序加载 `.env`、`.env.local`
-- 如果你已经在 Shell 里导出了同名环境变量，Shell 值优先，不会被本地文件覆盖
+## 隐私与仓库边界
 
-常用变量：
+这套示例故意把**个人数据留在仓库外**：
+
+- `examples/openclaw/.env` 是本地文件，已被 `.gitignore` 忽略
+- `~/.openclaw/openclaw.json` 是你自己的 OpenClaw 本机配置，不在仓库里
+- `~/.openclaw/workspace-xiaoai/` 里的 Core Files 属于你的本地 agent 工作区，也不在仓库里
+
+请不要把下面这些内容提交进仓库：
+
+- 局域网 IP
+- Gateway token / API key
+- 音箱序列号
+- 个人化 session user
+- 你自己家庭成员的偏好、称呼、画像
+
+## 前置条件
+
+开始前需要满足：
+
+- 音箱已刷机，并且能 SSH 登录
+- 音箱已运行 `packages/client-rust` 客户端
+- 本机已安装并运行 OpenClaw Gateway
+- 你希望为家庭音箱单独使用一个 `xiaoai` agent
+
+> [!IMPORTANT]
+> 本示例依赖本地 OpenClaw，不是“填一个云端 API Key 就能跑”的最小配置。
+
+## 第一步：准备 OpenClaw 的 `xiaoai` agent
+
+建议为音箱单独创建一个 `xiaoai` agent，而不是复用你的 `main` agent。
+
+最少需要：
+
+- 一个独立的 `agentId`：`xiaoai`
+- 一个独立工作区：例如 `~/.openclaw/workspace-xiaoai`
+- 该工作区里的 Core Files：`AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`
+
+## 第二步：在 OpenClaw 里启用插件工具
+
+本示例依赖 `examples/openclaw/xiaoai-tools-plugin/` 里的插件工具。
+
+在你的 `~/.openclaw/openclaw.json` 中，至少要有类似配置：
+
+```json
+{
+  "agents": {
+    "list": [
+      {
+        "id": "xiaoai",
+        "workspace": "/path/to/workspace-xiaoai",
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": [
+            "xiaoai_status",
+            "xiaoai_interrupt",
+            "xiaoai_pause",
+            "xiaoai_resume",
+            "xiaoai_speak",
+            "xiaoai_play_url",
+            "xiaoai_list_media",
+            "xiaoai_resolve_media_url",
+            "xiaoai_play_file",
+            "xiaoai_ask_native",
+            "xiaoai_device_info"
+          ]
+        }
+      }
+    ]
+  },
+  "plugins": {
+    "load": {
+      "paths": [
+        "/absolute/path/to/examples/openclaw/xiaoai-tools-plugin"
+      ]
+    },
+    "entries": {
+      "xiaoai-tools": {
+        "enabled": true,
+        "config": {
+          "bridgeBaseUrl": "http://127.0.0.1:4400",
+          "timeoutMs": 10000
+        }
+      }
+    }
+  }
+}
+```
+
+> [!IMPORTANT]
+> 这里要用的是 `alsoAllow`，不是 `allow`。
+>
+> 对 OpenClaw 的可选插件工具来说：
+>
+> - `profile: "minimal"` 用来保留核心最小工具面
+> - `alsoAllow` 用来**增量挂载插件工具**
+>
+> 如果你误用了 `allow`，很容易出现“插件明明加载了，但 agent 还是看不到工具”的情况。
+
+配置后执行：
+
+```bash
+openclaw config validate --json
+openclaw gateway restart
+openclaw plugins list
+```
+
+## 第三步：配置桥接服务
+
+复制示例环境文件：
+
+```bash
+cd examples/openclaw
+cp .env.example .env
+```
+
+然后只修改你自己的本地值，例如：
 
 - `OPENCLAW_BASE_URL`
 - `OPENCLAW_TOKEN`
-- `OPENCLAW_AGENT_ID`
 - `OPEN_XIAOAI_MEDIA_PUBLIC_ORIGIN`
 - `OPEN_XIAOAI_ASSISTANT_KEYWORDS`
-- `OPEN_XIAOAI_HOME_PATTERNS`
 
-## 选型结论
+示例中的默认值已经尽量做成“通用家庭助手”风格：
 
-本目录采用 **MiGPT 风格桥接方案**，而不是“小智风格音频全接管方案”。
+- 默认 agent：`xiaoai`
+- 默认 session user：`xiaoai-bridge-family`
+- 默认桥接前缀：`请,问问小爱,小爱帮忙`
+- 默认桥接历史：`0`（更推荐直接复用 OpenClaw 侧会话上下文）
 
-原因：
+> [!TIP]
+> 如果你觉得 `请` 太激进，可以把 `OPEN_XIAOAI_ASSISTANT_KEYWORDS` 改得更保守，比如：
+>
+> `问问小爱,小爱帮忙`
 
-- 小爱原生 ASR 已经能稳定得到识别文本，`Open-XiaoAI` 也已经能把它转成事件上报。
-- 小爱原生 TTS 和米家指令链路已经可用，复用它们的改造成本最低。
-- OpenClaw 当前最适合扮演“对话大脑 + 工具编排器”，不必在第一阶段同时承担 STT/TTS。
-- OpenClaw Gateway 默认提供本地控制面接口，HTTP Chat Completions 端点也可启用，适合作为桥接目标。
+## 第四步：启动桥接服务
 
-## 整体架构
-
-```text
-用户
-  ↓ 语音
-小爱音箱
-  ↓
-Open-XiaoAI Rust Client（音箱侧）
-  ⇅ WebSocket :4399
-Open-XiaoAI Bridge Server（本目录实现）
-  ├─ 路由文本到 OpenClaw Gateway
-  ├─ 调小爱播放文本 / URL / 音频流
-  └─ 调原生小爱执行米家命令
-  ↓
-OpenClaw Gateway（局域网 / 本机）
-  ├─ 对话
-  ├─ Skills
-  └─ 后续可接 Home Assistant
+```bash
+cd examples/openclaw
+pnpm install
+pnpm build
+pnpm start
 ```
 
-## 为什么不直接做“小智模式”
+其中：
 
-如果直接把小爱音箱当成“远程麦克风 + 扬声器”，虽然也能接 OpenClaw，但第一阶段就要同时解决：
+- `pnpm build` 会编译本示例依赖的 Rust 模块
+- `pnpm start` 会启动：
+  - 音箱桥接服务（默认 `4399`）
+  - 调试 API（默认 `4400`）
+  - 局域网媒体服务（默认 `4401`）
 
-- 实时 STT
-- 实时 TTS
-- 打断 / 半双工控制
-- 米家控制回退
+启动成功后，你应该能看到类似日志：
 
-这会把项目复杂度一下子拉高。当前更稳妥的做法是：
+- `Debug API 已启动`
+- `Media API 已启动`
+- `已连接: <speaker-ip>:<port>`
 
-- **输入** 继续使用小爱原生识别结果
-- **输出** 优先使用小爱原生 TTS / 音频播放
-- **家居控制** 优先继续走小爱原生链路
-- **OpenClaw** 专注于大模型对话和工具编排
+## 第五步：可选配置原生白名单
 
-## 第一阶段的工作边界
+Client 端支持“原生白名单”机制。
 
-第一阶段只做“文本桥接 + 播放控制 + 米家回退”，不做：
+白名单命中的内容，默认继续交给原生小爱；未命中的自由问答，则更倾向交给桥接 + OpenClaw。
 
-- 自建 STT 服务
-- 自建 TTS 服务
-- 全双工打断语音链路
-- OpenClaw Node / 设备节点协议接入
+你可以在音箱上创建：
 
-## 方案拆分
-
-### A. 音箱侧
-
-直接复用 `packages/client-rust`：
-
-- 监听小爱原生识别日志并上报 `instruction` 事件
-- 监听播放状态并上报 `playing` 事件
-- 提供 `run_shell`、`start_play`、`stop_play`、`start_recording`、`stop_recording` RPC
-
-本目录不改动音箱侧 Rust Client，只在服务端消费这些能力。
-
-### B. 桥接服务
-
-本目录新增一个 Node.js 服务，功能上参考 `examples/migpt`，但把 MiGPT 替换为 OpenClaw。
-
-桥接服务职责：
-
-1. 接收来自音箱的原生识别文本。
-2. 执行路由策略：
-   - 家居命令 → 交回原生小爱执行。
-   - 一般问答 → 发送给 OpenClaw。
-   - 媒体播放命令 → 让音箱播放指定 URL。
-3. 把 OpenClaw 返回的文本或结构化结果映射为小爱动作。
-
-### C. OpenClaw 侧
-
-OpenClaw 第一阶段不直接连小爱音箱，而是通过桥接服务协作。
-
-推荐使用两种方式之一：
-
-1. **HTTP Chat Completions**
-   - 优点：接入最简单。
-   - 适合第一阶段直接把文本消息送入 OpenClaw。
-2. **Skills 调桥接 API**
-   - 适合让 OpenClaw 主动执行“播 MP3”“交回小爱控制米家”等动作。
-
-## 推荐目录结构
-
-本目录建议做成和 `examples/migpt` 类似的双层结构：
-
-```text
-examples/openclaw/
-├─ README.md
-├─ PLAN.md
-├─ package.json
-├─ tsconfig.json
-├─ Cargo.toml
-├─ config.ts
-├─ src/
-│  ├─ lib.rs
-│  ├─ node.rs
-│  ├─ runtime.rs
-│  └─ server.rs
-└─ openclaw/
-   ├─ index.ts
-   ├─ bridge.ts
-   ├─ openclaw-client.ts
-   ├─ router.ts
-   ├─ speaker.ts
-   └─ types.ts
+```bash
+cat > /data/open-xiaoai/native_whitelist.txt <<'EOF2'
+灯
+空调
+窗帘
+电视
+米家
+播放
+暂停
+继续播放
+闹钟
+提醒
+EOF2
 ```
 
-说明：
+也可以通过环境变量传入：
 
-- `src/*.rs`：复用 `examples/migpt` 的 Rust + Neon 模式，负责和音箱客户端通信。
-- `openclaw/openclaw-client.ts`：负责请求 OpenClaw Gateway。
-- `openclaw/router.ts`：负责“问答 / 播放 / 米家”路由决策。
-- `openclaw/speaker.ts`：封装小爱音箱的播放、唤醒、回退命令。
-- `openclaw/bridge.ts`：把事件、OpenClaw 回复、小爱动作串起来。
+```bash
+export OPEN_XIAOAI_NATIVE_WHITELIST='灯,空调,窗帘,播放,暂停,提醒'
+```
 
-## 路由策略
+默认白名单已经覆盖常见的：
 
-### 1. 默认策略
+- 家居控制
+- 原生播放控制
+- 闹钟提醒类请求
 
-- 识别到明显家居命令：
-  - 例如“打开客厅灯”“关闭空调”“扫地机器人回充”
-  - 直接调用 `ask_xiaoai(text)`
-- 识别到媒体播放命令：
-  - 例如“播放某个播客”“播放某个 MP3 链接”
-  - 交给 OpenClaw 产出 URL 或结构化动作，再调用桥接播放
-- 其他一般问答：
-  - 交给 OpenClaw
-  - 再让小爱用原生 TTS 播报文本回复
+## 调试 API
 
-当前实现为了避免和原生小爱双重响应，默认只有命中 `assistantKeywords` 前缀的语句才进入桥接逻辑，比如：
+桥接服务默认提供本机调试接口：
 
-- `问问龙虾 今天上海天气怎么样`
-- `召唤龙虾 打开客厅灯`
-
-未命中前缀时，桥接服务会忽略这句识别文本，让原生小爱继续处理。
-
-### 2. 后续增强
-
-- 把路由从“关键词”升级为“意图分类”。
-- 引入白名单：只允许某些用户 / 唤醒词访问 OpenClaw。
-- 对家居命令增加二次确认策略。
-
-目前已经支持：
-
-- 关键词匹配：`homeKeywords`、`mediaKeywords`
-- 正则匹配：`homePatterns`、`mediaPatterns`
-
-其中正则配置适合处理更稳定的家居命令模板。
-
-## OpenClaw 接入方式
-
-### 方式一：先用 Chat Completions（推荐）
-
-直接由桥接服务调用 OpenClaw Gateway 的 OpenAI 兼容端点：
-
-- `POST /v1/chat/completions`
-- 默认和 Gateway 共用端口
-- 需要显式启用
-- 使用 Gateway Bearer Token 鉴权
-
-这条路径最适合 MVP，因为：
-
-- 不需要先写 OpenClaw 插件
-- 不需要先做 Gateway WebSocket 协议客户端
-- 易于调试和录制请求日志
-
-当前实现按 OpenClaw 官方 OpenAI 兼容 HTTP 接口发送：
-
-- `POST /v1/chat/completions`
-- `Authorization: Bearer <token>`
-- `x-openclaw-agent-id: <agentId>`
-- `model: "openclaw"`
-- `user: <sessionUser>` 用于复用会话
-
-### 方式二：后续增加 Skills
-
-为 OpenClaw 增加一个 `xiaoai_bridge` Skill，职责是：
-
-- 调本机桥接 API 播放音频
-- 调本机桥接 API 把文本交回原生小爱执行
-- 查询当前音箱状态
-
-这适合第二阶段做“OpenClaw 主动调用音箱动作”的能力。
-
-## 本地 API 设计
-
-桥接服务内部建议抽象出以下动作接口：
-
-- `speak(text)`
-  - 用小爱原生 TTS 播报文本
-- `playUrl(url)`
-  - 让音箱播放音频链接
-- `askXiaoAI(text)`
-  - 把命令交回原生小爱执行
-- `abortXiaoAI()`
-  - 打断小爱当前回复
-
-如果后续要给 OpenClaw Skill 调用，可再对外暴露 HTTP：
-
+- `GET /healthz`
+- `GET /api/status`
+- `GET /api/device`
+- `POST /api/interrupt`
+- `POST /api/pause`
+- `POST /api/resume`
 - `POST /api/speak`
 - `POST /api/play`
 - `POST /api/ask-xiaoai`
 - `POST /api/debug/text`
-- `GET /api/status`
+- `GET /api/media/list`
+- `GET /api/media/url?file=...`
 
-当前代码中，这些调试接口默认监听在 `127.0.0.1:${config.server.debugPort}`，便于本机联调。
-
-另外，桥接程序还会启动一个局域网媒体服务：
-
-- `http://<你的局域网IP>:4401/media/<文件路径>`
-- 默认从 `examples/openclaw/media` 目录读取音频文件
-- 适合让 OpenClaw 返回 `play_file` 动作，而不是手写完整 URL
-
-### 调试示例
+### 常用调试命令
 
 ```bash
 curl http://127.0.0.1:4400/healthz
 
-curl http://127.0.0.1:4400/api/media/list
+curl http://127.0.0.1:4400/api/status
 
-curl "http://127.0.0.1:4400/api/media/url?file=test.mp3"
+curl http://127.0.0.1:4400/api/device
+
+curl http://127.0.0.1:4400/api/media/list
 
 curl -X POST http://127.0.0.1:4400/api/debug/text \
   -H 'Content-Type: application/json' \
-  -d '{"text":"问问龙虾 今天上海天气怎么样","execute":false}'
+  -d '{"text":"请先调用 xiaoai_device_info，然后告诉我设备型号和序列号。","execute":false}'
 ```
 
 说明：
 
-- `execute=false` 只做路由和 OpenClaw 调用，不真正让音箱执行动作。
-- `execute=true` 会真正触发播报 / 播放 / 回退给原生小爱。
+- `execute=false`：只跑路由和 OpenClaw 调用，不真正让音箱执行动作
+- `execute=true`：真实执行播报、播放、委托原生小爱等动作
 
-### 路由规则调试建议
+## 当前工具面
 
-在调家居规则时，建议先用：
+本示例的插件工具包括：
 
-```bash
-curl -X POST http://127.0.0.1:4400/api/debug/text \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"召唤龙虾 打开客厅灯","execute":false}'
+- `xiaoai_status`
+- `xiaoai_interrupt`
+- `xiaoai_pause`
+- `xiaoai_resume`
+- `xiaoai_speak`
+- `xiaoai_play_url`
+- `xiaoai_list_media`
+- `xiaoai_resolve_media_url`
+- `xiaoai_play_file`
+- `xiaoai_ask_native`
+- `xiaoai_device_info`
+
+## 行为约定：`NO_REPLY`
+
+当工具已经完成了用户可感知的动作，例如：
+
+- 已经打断
+- 已经开始播放
+- 已经直接播报
+- 已经委托原生小爱去执行并自行回复
+
+`xiaoai` agent 应该返回：
+
+```text
+NO_REPLY
 ```
 
-先看返回里的：
+这样桥接层就不会再额外补一段重复播报。
 
-- `routedAs`
-- `normalizedText`
-- `action`
+## 故障排查
 
-确认命中的是 `home_control` 或 `openclaw`，再把 `execute` 改成 `true`。
+### 1. 插件已加载，但 agent 看不到工具
 
-### `play_file` 动作
+先检查：
 
-现在除了 `play_url`，还支持：
+- `openclaw plugins list`
+- `openclaw agent --agent xiaoai --message '请先调用 xiaoai_device_info' --json`
 
-```json
-{
-  "action": "play_file",
-  "file": "music/demo.mp3"
-}
-```
+如果运行报告里 `tools.entries` 只有 `session_status`，大概率是你把：
 
-桥接服务会自动把它转换成局域网可访问的音频 URL。
+- `alsoAllow`
 
-### 调试脚本
+写成了：
 
-```bash
-pnpm media:url -- --list
-pnpm media:url -- music/demo.mp3
-pnpm smoke
-pnpm smoke -- --live
-```
+- `allow`
 
-这个脚本会输出：
+### 2. 原生小爱还是抢话
 
-- 媒体根目录
-- 检测到的局域网 IP
-- 最终可给音箱访问的音频 URL
+优先检查：
 
-其中：
+- 音箱上 `client` 是否为最新版本
+- `/data/open-xiaoai/native_whitelist.txt` 是否过宽
+- 桥接日志里是否出现 `prepare_bridge_done`
+- Client 日志里是否出现 `native_reply_detected` / `local_interrupt_done`
 
-- `pnpm smoke` 会做纯本地检查：路由规则、媒体 URL、OpenClaw 动作解析
-- `pnpm smoke -- --live` 会额外访问本机调试接口，检查 `http://127.0.0.1:4400`
+### 3. 已经调用工具，但桥接还重复播报
 
-## OpenClaw Skill 草案
+先看桥接调试输出：
 
-根据 OpenClaw 官方技能文档，技能目录通常放在工作区的 `skills/` 下，并以 `SKILL.md` 作为入口。
+- 是否最终归一化成 `action: "no_reply"`
+- `xiaoai` agent 最后是否真的返回 `NO_REPLY`
 
-本示例已在这里准备了一个可直接改造的草案：
+### 4. 语音回复明显偏慢
 
-- `examples/openclaw/skills/xiaoai-bridge/SKILL.md`
-- `examples/openclaw/skills/xiaoai-bridge/invoke.mjs`
+当前总耗时通常分为：
 
-用途：
+- 音箱 ASR 到桥接收到最终文本
+- 桥接发给 OpenClaw 的模型耗时
+- 工具执行耗时
+- 音箱播报启动耗时
 
-- 让 OpenClaw 主动查询桥接状态
-- 让 OpenClaw 主动调用小爱播报文本
-- 让 OpenClaw 主动让小爱播放 URL 音频
-- 让 OpenClaw 把米家命令回退给原生小爱
+建议先分别看：
 
-如果你的 OpenClaw 工作区不在本目录，可把 `xiaoai-bridge` 整个文件夹复制到你的 OpenClaw 工作区 `skills/` 目录中。
+- `examples/openclaw` 桥接日志
+- `openclaw agent --json` 的 `durationMs`
+- 音箱侧 client 日志
 
-技能默认访问：
+## 仓库内与仓库外的文件
 
-- `http://127.0.0.1:4400`
+**仓库内：**
 
-也可以通过下面这个环境变量覆盖：
+- `examples/openclaw/`
+- `examples/openclaw/xiaoai-tools-plugin/`
 
-- `OPEN_XIAOAI_BRIDGE_BASE_URL`
+**仓库外：**
 
-示例：
+- `~/.openclaw/openclaw.json`
+- `~/.openclaw/workspace-xiaoai/`
+- `examples/openclaw/.env`
+- `/data/open-xiaoai/native_whitelist.txt`
 
-```bash
-node examples/openclaw/skills/xiaoai-bridge/invoke.mjs status
-node examples/openclaw/skills/xiaoai-bridge/invoke.mjs debug-text "问问龙虾 今天上海天气怎么样"
-node examples/openclaw/skills/xiaoai-bridge/invoke.mjs speak "我已经连上桥接服务。"
-node examples/openclaw/skills/xiaoai-bridge/invoke.mjs ask-xiaoai "打开客厅灯"
-```
-
-## 建议的回复协议
-
-为了让 OpenClaw 更容易和桥接服务协作，建议第一阶段先约定一个很小的结构化回复协议：
-
-```json
-{
-  "action": "reply_text",
-  "text": "你好，我在。"
-}
-```
-
-后续扩展：
-
-```json
-{
-  "action": "play_url",
-  "url": "http://192.168.1.10:8080/audio/demo.mp3"
-}
-```
-
-```json
-{
-  "action": "ask_xiaoai",
-  "text": "打开客厅灯"
-}
-```
-
-MVP 阶段可先允许非结构化文本，默认按 `reply_text` 处理。
-
-## 分阶段计划
-
-### 阶段 1：MVP 文本桥接
-
-交付目标：
-
-- 小爱说一句话，桥接服务能拿到文本。
-- 桥接服务能把文本发给 OpenClaw。
-- OpenClaw 的文本回复能通过小爱 TTS 说出来。
-
-### 阶段 2：播放 URL / MP3
-
-交付目标：
-
-- OpenClaw 能触发“播放某个 URL”。
-- 小爱能播放局域网可访问的 MP3。
-
-### 阶段 3：米家回退
-
-交付目标：
-
-- 家居命令被桥接服务识别后，直接交回小爱执行。
-- 典型米家命令不经过 OpenClaw 也能稳定执行。
-
-### 阶段 4：OpenClaw Skill 化
-
-交付目标：
-
-- OpenClaw 能通过 Skill 主动让小爱播放、朗读或执行原生命令。
-
-### 阶段 5：可选接入 Home Assistant
-
-交付目标：
-
-- 对于小爱不擅长的设备或复杂自动化，由 OpenClaw 转接到 Home Assistant。
-
-## 风险与规避
-
-### 1. 识别文本重复上报
-
-需要在桥接层按 `dialog_id + text + 时间窗口` 做去重。
-
-### 2. 小爱与 OpenClaw 双重回复
-
-默认要对识别文本做路由，不要让同一句既被 OpenClaw 回复、又被原生小爱继续完整处理。
-
-### 3. 音频 URL 可达性
-
-MP3 需要让音箱能直接访问：
-
-- 局域网 HTTP 服务
-- NAS 静态文件服务
-- Nginx / Caddy 临时目录
-
-不要传本机绝对路径给音箱。
-
-### 4. OpenClaw 权限过大
-
-桥接服务只应连接内网 / 本机的 Gateway，并使用私有 Token；不要把 Gateway 或桥接 API 直接暴露到公网。
-
-## 开发顺序建议
-
-1. 先复制并改造 `examples/migpt` 的骨架。
-2. 先接通 OpenClaw Chat Completions。
-3. 再做播放 URL。
-4. 再做家居命令回退。
-5. 最后再做 OpenClaw Skill。
-
-## 参考资料
-
-- OpenClaw Gateway 网络模型：<https://docs.openclaw.ai/gateway/network-model>
-- OpenClaw Gateway 架构：<https://docs.openclaw.ai/concepts/architecture>
-- OpenClaw OpenAI Chat Completions：<https://docs.openclaw.ai/gateway/openai-http-api>
-- OpenClaw Skills：<https://docs.openclaw.ai/skills>
-- OpenClaw Creating Skills：<https://docs.openclaw.ai/tools/creating-skills>
-
+推荐把所有“个人化配置”都留在这些仓库外的位置。

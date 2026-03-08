@@ -68,8 +68,15 @@ export class OpenClawClient {
 
   normalizeAction(reply: string): BridgeAction {
     const raw = unwrapJsonCodeFence(reply);
+    if (isNoReplyToken(raw)) {
+      return { action: "no_reply" };
+    }
+
     try {
       const parsed = JSON.parse(raw) as Partial<BridgeAction>;
+      if (parsed.action === "no_reply") {
+        return { action: "no_reply" };
+      }
       if (parsed.action === "play_url" && typeof parsed.url === "string") {
         return { action: "play_url", url: parsed.url };
       }
@@ -88,6 +95,13 @@ export class OpenClawClient {
 
     return { action: "reply_text", text: reply };
   }
+}
+
+function isNoReplyToken(text: string) {
+  const normalized = text.trim();
+  return /^(?:\[\[\s*NO_REPLY\s*\]\]|NO_REPLY)$/i.test(normalized)
+    || normalized === "No response from OpenClaw."
+    || normalized === "No reply from agent.";
 }
 
 function unwrapJsonCodeFence(text: string) {

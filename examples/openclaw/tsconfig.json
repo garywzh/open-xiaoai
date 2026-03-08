@@ -10,9 +10,18 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["openclaw/*"]
+      "@/*": [
+        "openclaw/*"
+      ]
     }
   },
-  "include": ["openclaw", "scripts", "config.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "openclaw",
+    "scripts",
+    "config.ts",
+    "xiaoai-tools-plugin"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }

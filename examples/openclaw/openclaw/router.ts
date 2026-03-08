@@ -13,16 +13,21 @@ export class BridgeRouter {
 
   decide(text: string): RouteDecision {
     const normalizedText = text.trim();
-    const strippedText = this.stripAssistantKeyword(normalizedText);
-
-    if (!strippedText) {
+    if (!normalizedText) {
       return {
         type: "ignore",
         text: normalizedText,
       };
     }
 
-    const effectiveText = strippedText.trim();
+    const effectiveText = this.normalizeBridgeText(normalizedText).trim();
+    if (!effectiveText) {
+      return {
+        type: "ignore",
+        text: normalizedText,
+      };
+    }
+
     const matchedAudioUrl = effectiveText.match(AUDIO_URL_PATTERN)?.[1];
 
     if (matchedAudioUrl && this.matchesMediaRule(effectiveText)) {
@@ -33,9 +38,9 @@ export class BridgeRouter {
       };
     }
 
-    if (this.matchesHomeRule(effectiveText)) {
+    if (this.matchesNativeWhitelistRule(effectiveText)) {
       return {
-        type: "home_control",
+        type: "ignore",
         text: effectiveText,
       };
     }
@@ -76,7 +81,11 @@ export class BridgeRouter {
     return this.matchesPattern(text, this.mediaPatterns) || this.includesAny(text, this.config.mediaKeywords);
   }
 
-  private stripAssistantKeyword(text: string) {
+  private matchesNativeWhitelistRule(text: string) {
+    return this.matchesHomeRule(text) || this.matchesMediaRule(text);
+  }
+
+  private normalizeBridgeText(text: string) {
     for (const keyword of this.config.assistantKeywords) {
       if (text === keyword) {
         return "";
@@ -87,7 +96,7 @@ export class BridgeRouter {
       }
     }
 
-    return undefined;
+    return text;
   }
 }
 

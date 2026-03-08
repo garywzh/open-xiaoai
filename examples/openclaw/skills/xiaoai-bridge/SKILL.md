@@ -24,9 +24,9 @@ Run the helper with Node:
 
 ```bash
 node {baseDir}/invoke.mjs status
-node {baseDir}/invoke.mjs debug-text "问问龙虾 今天上海天气怎么样"
+node {baseDir}/invoke.mjs debug-text "请 今天上海天气怎么样"
 node {baseDir}/invoke.mjs speak "我已经连上局域网桥接服务。"
-node {baseDir}/invoke.mjs play "http://192.168.1.8:4401/media/music/demo.mp3"
+node {baseDir}/invoke.mjs play "http://你的局域网IP:4401/media/music/demo.mp3"
 node {baseDir}/invoke.mjs ask-xiaoai "打开客厅灯"
 ```
 

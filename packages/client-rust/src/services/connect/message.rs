@@ -177,7 +177,16 @@ impl MessageManager {
                     .on_response(response)
                     .await
             }
-            AppMessage::Event(event) => MessageHandler::<Event>::instance().on(event).await,
+            AppMessage::Event(event) => {
+                self.run_concurrently(move || {
+                    let event = event.clone();
+                    async move {
+                        MessageHandler::<Event>::instance().on(event).await?;
+                        Ok(())
+                    }
+                })
+                .await
+            }
             _ => Ok(()),
         }
     }
