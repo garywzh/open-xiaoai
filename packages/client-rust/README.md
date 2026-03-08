@@ -38,45 +38,32 @@ curl -L -o /data/init.sh https://gitee.com/idootop/artifacts/releases/download/o
 reboot
 ```
 
-## 原生白名单与抢话拦截
+## 显式路由与抢话拦截
 
-现在的 Rust Client 不只是“被动转发”，还会在设备侧做一层很关键的辅助逻辑：
+现在的 Rust Client 不再在设备侧维护“语义白名单”，而是只负责两件事：
 
-- 记录最终 ASR 文本
-- 如果文本**不在原生白名单**里，而原生小爱又开始播报/播放
-- Client 会在设备侧尝试立刻打断原生回复，让桥接服务继续接管
+- 记录最终 ASR 对话 `dialog_id`
+- 接收桥接服务对该对话的显式裁决：`allow_native=true/false`
 
-原生白名单的读取顺序：
+实际工作流变成：
 
-1. 环境变量 `OPEN_XIAOAI_NATIVE_WHITELIST`
-2. 文件 `/data/open-xiaoai/native_whitelist.txt`
-3. 内置默认关键词
+- Client 先记录这句最终识别文本
+- Bridge 在服务端判断这句应该交给谁消费
+- 如果应该交给原生小爱，Bridge 会显式下发“放行原生回复”
+- 如果应该交给桥接 / OpenClaw，而原生小爱又开始播报，Client 会本地尝试立刻打断
 
-默认白名单主要覆盖：
+这样做的好处是：
 
-- 灯、空调、窗帘、电视等家居控制
-- 播放、暂停、继续播放、上一首、下一首、音量
-- 闹钟、提醒
+- 有效命令的消费方由 **Server 统一决定**
+- Client 不再靠关键词猜测“这句是不是该拦”
+- 不会再出现“桥接和原生都不消费”的设计空洞
 
-如果你想自定义，可以在音箱上创建：
+调试时可以重点看这些日志：
 
-```shell
-cat > /data/open-xiaoai/native_whitelist.txt <<'EOF'
-灯
-空调
-窗帘
-米家
-播放
-暂停
-继续播放
-闹钟
-提醒
-EOF
-```
-
-> [!TIP]
-> 白名单越宽，原生小爱保留得越多；白名单越窄，桥接服务接管得越多。
-> 家庭环境里建议先保守一些，再逐步收窄。
+- `dialog_mode_set`
+- `native_reply_allowed`
+- `native_reply_detected`
+- `local_interrupt_done`
 
 ## 编译运行
 

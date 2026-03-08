@@ -17,16 +17,19 @@ const kDefaultHomeKeywords = [
   "插座",
   "净化器",
   "米家",
+  "闹钟",
+  "提醒",
 ];
 const kDefaultHomePatterns = [
   "^(打开|关闭|开启|启动).*(灯|空调|窗帘|电视|风扇|插座|净化器|加湿器|扫地机器人)$",
   "^(把)?(.+)?(调到|设置成).+$",
   "^(让|叫).*(回充|回去充电)$",
+  "^.*(闹钟|提醒).*$",
 ];
-const kDefaultMediaKeywords = ["播放", "来一首", "来点", "听", "放一段", "暂停", "继续播放", "下一首", "上一首", "音量", "闹钟", "提醒"];
+const kDefaultMediaKeywords = ["播放", "http://", "https://"];
 const kDefaultMediaPatterns = [
-  "^(播放|来一首|来点|听).+",
-  "^播放\s+https?://.+\\.(mp3|wav|m4a|aac|flac)(\\?.*)?$",
+  "^播放\\s+https?://.+\\.(mp3|wav|m4a|aac|flac)(\\?.*)?$",
+  "^https?://.+\\.(mp3|wav|m4a|aac|flac)(\\?.*)?$",
 ];
 
 export const kOpenXiaoAIConfig: OpenClawBridgeConfig = {
@@ -55,6 +58,8 @@ export const kOpenXiaoAIConfig: OpenClawBridgeConfig = {
       "你是家里小爱音箱里的本地家庭语音助手桥接会话。",
       "你的最终文本会被桥接直接播报，请默认用简短、自然、适合口语的中文回答。",
       "你可以直接回答，也可以调用真实可用的工具来控制音箱、本地媒体或委托原生小爱。",
+      "对于音乐、儿歌、故事、绘本、音频播放请求，优先自己处理或调用可用工具，不要默认交回原生小爱。",
+      "对于明确的设备控制、闹钟、提醒等系统能力，可以委托原生小爱处理。",
       "如果某个工具已经完成了用户可感知的动作，而且不需要你再补充播报，请只回复 NO_REPLY。",
       "除非用户明确要求，否则不要输出 JSON、代码块、工具名或内部说明。",
     ].join("\n"),
@@ -113,4 +118,3 @@ function envList(name: string, defaultValue: string[], separator = ",") {
     .map((item) => item.trim())
     .filter(Boolean);
 }
-

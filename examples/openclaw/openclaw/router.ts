@@ -38,9 +38,9 @@ export class BridgeRouter {
       };
     }
 
-    if (this.matchesNativeWhitelistRule(effectiveText)) {
+    if (this.matchesHomeRule(effectiveText)) {
       return {
-        type: "ignore",
+        type: "home_control",
         text: effectiveText,
       };
     }
@@ -79,10 +79,6 @@ export class BridgeRouter {
 
   private matchesMediaRule(text: string) {
     return this.matchesPattern(text, this.mediaPatterns) || this.includesAny(text, this.config.mediaKeywords);
-  }
-
-  private matchesNativeWhitelistRule(text: string) {
-    return this.matchesHomeRule(text) || this.matchesMediaRule(text);
   }
 
   private normalizeBridgeText(text: string) {

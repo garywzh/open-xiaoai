@@ -5,7 +5,7 @@
 它的定位不是“把音箱变成另一台电脑”，而是：
 
 - 大部分自由问答、陪聊、简单知识问答，交给 OpenClaw 里的 `xiaoai` agent
-- 家居控制、原生音乐生态、闹钟提醒等高确定性能力，优先保留给原生小爱
+- 明确的家居控制、闹钟提醒等系统能力，由桥接显式且静默地委托原生小爱
 - 本地音频播放、打断、状态查询等能力，通过 OpenClaw 插件工具调用
 - 当工具已经完成动作时，用 `NO_REPLY` 避免桥接再次重复播报
 
@@ -30,7 +30,7 @@
 ## 功能特点
 
 - **默认接管自由问答**：更适合家庭问答、儿童场景、短对话
-- **原生白名单保留**：家居控制、闹钟提醒、原生播放等可继续走原生小爱
+- **服务端显式路由**：每条有效指令都必须落到 agent、原生小爱或直接播放之一
 - **设备侧抢话拦截**：Client 发现原生回复开始播报时，会本地尝试打断
 - **插件工具调用**：`xiaoai` agent 可以主动打断、播报、播放本地音频、查设备信息
 - **静默收尾**：工具完成动作后，返回 `NO_REPLY`，避免二次播报
@@ -167,13 +167,13 @@ cp .env.example .env
 关于 `OPEN_XIAOAI_ASSISTANT_KEYWORDS`：
 
 - **现在的推荐主流程已经不依赖这组前缀来触发桥接**
-- 日常真实语音链路里，是否由桥接接管，主要取决于 **设备侧原生白名单** 与 **Client 的抢话拦截逻辑**
+- 日常真实语音链路里，是否交给 agent 或原生小爱，主要取决于 **桥接服务的路由规则**
 - 这个变量现在更适合当作 **兼容选项 / 调试选项**：
   - 你手动调用 `/api/debug/text` 时
   - 你想保留“显式唤起本地助手”的口头前缀时
   - 你需要把前缀从文本里剥掉，再交给 OpenClaw 时
 
-如果你完全不想用这类前缀，也没问题；当前推荐方式就是直接说正常话，让白名单和桥接逻辑决定谁接管。
+如果你完全不想用这类前缀，也没问题；当前推荐方式就是直接说正常话，让桥接服务决定谁接管。
 
 ## 第四步：启动桥接服务
 
@@ -198,40 +198,29 @@ pnpm start
 - `Media API 已启动`
 - `已连接: <speaker-ip>:<port>`
 
-## 第五步：可选配置原生白名单
+## 第五步：按需调整服务端路由
 
-Client 端支持“原生白名单”机制。
+当前推荐方案里，**命令消费方由桥接服务统一决定**：
 
-白名单命中的内容，默认继续交给原生小爱；未命中的自由问答，则更倾向交给桥接 + OpenClaw。
+- `home_control`：桥接静默委托原生小爱，避免多余确认播报
+- `play_url_direct`：桥接直接播放 URL
+- `openclaw`：交给 OpenClaw `xiaoai` agent
+- `ignore`：只保留给空文本、纯前缀、无效输入
 
-你可以在音箱上创建：
+默认配置已经偏向你现在的家庭场景：
 
-```bash
-cat > /data/open-xiaoai/native_whitelist.txt <<'EOF2'
-灯
-空调
-窗帘
-电视
-米家
-播放
-暂停
-继续播放
-闹钟
-提醒
-EOF2
-```
+- 家电控制、闹钟、提醒优先走原生小爱
+- 歌曲、绘本、故事、儿歌等播放请求默认走 agent
+- 只有显式音频 URL 才走 `play_url_direct`
 
-也可以通过环境变量传入：
+如果你想调路由，主要改这些环境变量：
 
 ```bash
-export OPEN_XIAOAI_NATIVE_WHITELIST='灯,空调,窗帘,播放,暂停,提醒'
+OPEN_XIAOAI_HOME_KEYWORDS=打开,关闭,调到,设置,回充,扫地,空调,灯,窗帘,电视,加湿器,风扇,插座,净化器,米家,闹钟,提醒
+OPEN_XIAOAI_HOME_PATTERNS=^(打开|关闭|开启|启动).*(灯|空调|窗帘|电视|风扇|插座|净化器|加湿器|扫地机器人)$;^(把)?(.+)?(调到|设置成).+$;^(让|叫).*(回充|回去充电)$;^.*(闹钟|提醒).*$
+OPEN_XIAOAI_MEDIA_KEYWORDS=播放,http://,https://
+OPEN_XIAOAI_MEDIA_PATTERNS=^播放\s+https?://.+\.(mp3|wav|m4a|aac|flac)(\?.*)?$;^https?://.+\.(mp3|wav|m4a|aac|flac)(\?.*)?$
 ```
-
-默认白名单已经覆盖常见的：
-
-- 家居控制
-- 原生播放控制
-- 闹钟提醒类请求
 
 ## 调试 API
 
@@ -326,9 +315,9 @@ NO_REPLY
 优先检查：
 
 - 音箱上 `client` 是否为最新版本
-- `/data/open-xiaoai/native_whitelist.txt` 是否过宽
+- `OPEN_XIAOAI_HOME_KEYWORDS` / `OPEN_XIAOAI_HOME_PATTERNS` 是否写得过宽
 - 桥接日志里是否出现 `prepare_bridge_done`
-- Client 日志里是否出现 `native_reply_detected` / `local_interrupt_done`
+- Client 日志里是否出现 `dialog_mode_set` / `native_reply_detected` / `local_interrupt_done`
 
 ### 3. 已经调用工具，但桥接还重复播报
 
@@ -364,6 +353,5 @@ NO_REPLY
 - `~/.openclaw/openclaw.json`
 - `~/.openclaw/workspace-xiaoai/`
 - `examples/openclaw/.env`
-- `/data/open-xiaoai/native_whitelist.txt`
 
 推荐把所有“个人化配置”都留在这些仓库外的位置。

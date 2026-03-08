@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -41,8 +41,12 @@ async function runRouterChecks(
   assert.equal(weather.text, "今天上海天气怎么样");
 
   const home = router.decide(`${prefix} 打开客厅灯`);
-  assert.equal(home.type, "ignore");
+  assert.equal(home.type, "home_control");
   assert.equal(home.text, "打开客厅灯");
+
+  const song = router.decide(`${prefix} 播放周杰伦的七里香`);
+  assert.equal(song.type, "openclaw");
+  assert.equal(song.text, "播放周杰伦的七里香");
 
   const play = router.decide(`${prefix} 播放 http://127.0.0.1/demo.mp3`);
   assert.equal(play.type, "play_url_direct");
@@ -133,4 +137,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
-

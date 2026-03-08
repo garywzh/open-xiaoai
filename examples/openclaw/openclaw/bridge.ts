@@ -55,7 +55,7 @@ export class OpenClawBridge {
   private readonly client: OpenClawClient;
   private readonly router: BridgeRouter;
   private readonly history: BridgeMessage[] = [];
-  private readonly seenTexts = new Map<string, number>();
+  private readonly seenCommands = new Map<string, number>();
   private traceSeq = 0;
 
   constructor(private readonly config: OpenClawBridgeConfig) {
@@ -119,12 +119,13 @@ export class OpenClawBridge {
     const trace = this.createTrace(text, dialogId);
     this.logTrace(trace, "received_final_asr");
 
-    const previousAt = this.seenTexts.get(text);
+    const dedupeKey = dialogId?.trim() || text;
+    const previousAt = this.seenCommands.get(dedupeKey);
     if (this.router.shouldDedupe(previousAt)) {
-      this.logTrace(trace, "deduped_skip");
+      this.logTrace(trace, `deduped_skip key=${dedupeKey}`);
       return;
     }
-    this.seenTexts.set(text, Date.now());
+    this.seenCommands.set(dedupeKey, Date.now());
 
     console.log(`🔥 收到指令: ${text}`);
 
@@ -136,6 +137,12 @@ export class OpenClawBridge {
     const trace = options?.trace ?? this.createTrace(text);
     const decision = this.router.decide(text);
     this.logTrace(trace, `route type=${decision.type}`);
+
+    if (execute) {
+      const stageStartedAt = Date.now();
+      await this.syncDialogMode(trace, decision.type, decision.text);
+      this.logTrace(trace, `sync_dialog_mode_done cost=${Date.now() - stageStartedAt}ms`);
+    }
 
     if (decision.type === "ignore") {
       this.logTrace(trace, "ignore");
@@ -156,7 +163,7 @@ export class OpenClawBridge {
     if (decision.type === "home_control") {
       if (execute) {
         const stageStartedAt = Date.now();
-        await OpenXiaoAISpeaker.askXiaoAI(decision.text);
+        await OpenXiaoAISpeaker.askXiaoAI(decision.text, { silent: true });
         this.logTrace(trace, `ask_xiaoai_done cost=${Date.now() - stageStartedAt}ms`);
       }
       this.logTrace(trace, "done");
@@ -230,6 +237,19 @@ export class OpenClawBridge {
     const elapsed = Date.now() - trace.startedAt;
     const dialog = trace.dialogId ? ` dialog=${trace.dialogId}` : "";
     console.log(`⏱️ [bridge#${trace.id}] +${elapsed}ms ${stage}${dialog} text=${trace.input}`);
+  }
+
+  private async syncDialogMode(trace: TraceContext, routeType: DebugRunResult["routedAs"], text: string) {
+    const dialogId = trace.dialogId?.trim();
+    if (!dialogId) {
+      return;
+    }
+
+    const allowNative = routeType === "home_control" || routeType === "ignore";
+    const ok = await RustServer.set_dialog_mode(dialogId, allowNative, text);
+    if (!ok) {
+      console.warn(`⚠️ 同步对话模式失败 dialog=${dialogId} allowNative=${allowNative}`);
+    }
   }
 
   private async interruptCurrentAudio() {
@@ -433,7 +453,7 @@ export class OpenClawBridge {
         agentId: this.config.openclaw.agentId ?? "main",
         sessionUser: this.config.openclaw.sessionUser,
         historyLength: this.history.length,
-        dedupeCacheSize: this.seenTexts.size,
+        dedupeCacheSize: this.seenCommands.size,
         mediaBaseURL: resolveMediaBaseURL(this.config.media),
       });
       return;

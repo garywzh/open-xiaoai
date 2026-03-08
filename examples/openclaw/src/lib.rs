@@ -31,6 +31,26 @@ async fn run_shell(script: String, timeout_millis: f64) -> String {
 }
 
 #[neon::export]
+async fn set_dialog_mode(dialog_id: String, allow_native: bool, text: Option<String>) -> bool {
+    let res = RPC::instance()
+        .call_remote(
+            "set_dialog_mode",
+            Some(json!({
+                "dialog_id": dialog_id,
+                "allow_native": allow_native,
+                "text": text,
+            })),
+            Some(2_000),
+        )
+        .await;
+
+    match res {
+        Err(_) => false,
+        Ok(response) => response.code.unwrap_or(0) == 0,
+    }
+}
+
+#[neon::export]
 async fn on_output_data(bytes: Vec<u8>) -> bool {
     MessageManager::instance()
         .send_stream("play", bytes, None)

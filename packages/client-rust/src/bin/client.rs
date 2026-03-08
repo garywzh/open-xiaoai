@@ -3,10 +3,10 @@ use open_xiaoai::services::monitor::file::FileMonitorEvent;
 use open_xiaoai::services::monitor::instruction::{InstructionMonitor, LogMessage, Payload};
 use open_xiaoai::services::monitor::kws::KwsMonitor;
 use open_xiaoai::services::monitor::playing::PlayingMonitor;
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -21,10 +21,10 @@ use open_xiaoai::services::connect::handler::MessageHandler;
 use open_xiaoai::services::connect::message::{MessageManager, WsStream};
 use open_xiaoai::services::connect::rpc::RPC;
 
-const DEFAULT_NATIVE_WHITELIST_KEYWORDS: &[&str] = &["灯", "空调", "窗帘", "电视", "加湿器", "风扇", "插座", "净化器", "米家", "回充", "扫地", "播放", "来一首", "来点", "听", "放一段", "暂停", "继续播放", "下一首", "上一首", "音量", "闹钟", "提醒"];
-const NATIVE_WHITELIST_FILE_PATH: &str = "/data/open-xiaoai/native_whitelist.txt";
 const SUPPRESSED_DIALOG_TTL: Duration = Duration::from_secs(15);
 const COMMON_WAKE_PREFIXES: &[&str] = &["小爱同学", "小爱", "你好小爱", "嗨小爱"];
+
+static REPLY_SUPPRESSOR: LazyLock<LocalReplySuppressor> = LazyLock::new(LocalReplySuppressor::new);
 
 struct AppClient {
     kws_monitor: KwsMonitor,
@@ -39,7 +39,7 @@ impl AppClient {
             kws_monitor: KwsMonitor::new(),
             instruction_monitor: InstructionMonitor::new(),
             playing_monitor: PlayingMonitor::new(),
-            reply_suppressor: LocalReplySuppressor::new(),
+            reply_suppressor: REPLY_SUPPRESSOR.clone(),
         }
     }
 
@@ -82,6 +82,7 @@ impl AppClient {
         rpc.add_command("stop_play", stop_play).await;
         rpc.add_command("start_recording", start_recording).await;
         rpc.add_command("stop_recording", stop_recording).await;
+        rpc.add_command("set_dialog_mode", set_dialog_mode).await;
 
         let reply_suppressor = self.reply_suppressor.clone();
         self.instruction_monitor
@@ -127,20 +128,18 @@ impl AppClient {
 struct DialogTrace {
     recognized_at: Instant,
     text: String,
+    allow_native: bool,
 }
 
 #[derive(Clone)]
 struct LocalReplySuppressor {
-    native_whitelist_keywords: Arc<Vec<String>>,
     dialogs: Arc<Mutex<HashMap<String, DialogTrace>>>,
 }
 
 impl LocalReplySuppressor {
     fn new() -> Self {
-        let native_whitelist_keywords = Arc::new(load_native_whitelist_keywords());
-        println!("✅ 原生白名单关键词: {:?}", native_whitelist_keywords);
+        println!("✅ 本地抢话拦截已启用（由服务端显式裁决原生/桥接）");
         Self {
-            native_whitelist_keywords,
             dialogs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -174,14 +173,15 @@ impl LocalReplySuppressor {
                     .first()
                     .map(|item| item.text.trim())
                     .unwrap_or_default();
-                if self.should_bridge_text(text) {
-                    println!("⏱️ [client] asr_final dialog={} text={}", dialog_id, text);
+                if self.should_track_dialog(text) {
+                    println!("⏱️ [client] asr_final dialog={} mode=pending text={}", dialog_id, text);
                     let mut dialogs = self.dialogs.lock().await;
                     dialogs.insert(
                         dialog_id.to_string(),
                         DialogTrace {
                             recognized_at: Instant::now(),
                             text: text.to_string(),
+                            allow_native: false,
                         },
                     );
                 }
@@ -196,6 +196,15 @@ impl LocalReplySuppressor {
                     let elapsed_since_asr = dialog_trace.recognized_at.elapsed().as_millis();
                     let dialog_id = dialog_id.to_string();
                     let text = dialog_trace.text;
+
+                    if dialog_trace.allow_native {
+                        println!(
+                            "⏱️ [client] native_reply_allowed dialog={} since_asr={}ms text={}",
+                            dialog_id, elapsed_since_asr, text
+                        );
+                        return;
+                    }
+
                     println!(
                         "⏱️ [client] native_reply_detected dialog={} since_asr={}ms text={}",
                         dialog_id, elapsed_since_asr, text
@@ -219,6 +228,36 @@ impl LocalReplySuppressor {
         }
     }
 
+    async fn set_dialog_mode(&self, dialog_id: &str, allow_native: bool, text: Option<&str>) {
+        let dialog_id = dialog_id.trim();
+        if dialog_id.is_empty() {
+            return;
+        }
+
+        let mut dialogs = self.dialogs.lock().await;
+        let entry = dialogs
+            .entry(dialog_id.to_string())
+            .or_insert_with(|| DialogTrace {
+                recognized_at: Instant::now(),
+                text: text.unwrap_or_default().trim().to_string(),
+                allow_native,
+            });
+
+        entry.allow_native = allow_native;
+        if entry.text.is_empty() {
+            if let Some(text) = text {
+                entry.text = text.trim().to_string();
+            }
+        }
+
+        println!(
+            "⏱️ [client] dialog_mode_set dialog={} allow_native={} text={}",
+            dialog_id,
+            allow_native,
+            entry.text
+        );
+    }
+
     async fn clear(&self) {
         self.dialogs.lock().await.clear();
     }
@@ -228,29 +267,18 @@ impl LocalReplySuppressor {
         dialogs.retain(|_, trace| trace.recognized_at.elapsed() < SUPPRESSED_DIALOG_TTL);
     }
 
-    fn should_bridge_text(&self, text: &str) -> bool {
-        let normalized = normalize_text(text);
-        if normalized.is_empty() {
-            return false;
-        }
-
-        let candidates = [normalized.clone(), strip_wake_prefixes(&normalized)];
-
-        candidates.iter().any(|candidate| {
-            if candidate.is_empty() {
-                return false;
-            }
-
-            !self.matches_native_whitelist(candidate)
-        })
+    fn should_track_dialog(&self, text: &str) -> bool {
+        let normalized = strip_wake_prefixes(&normalize_text(text));
+        !normalized.is_empty()
     }
+}
 
-    fn matches_native_whitelist(&self, text: &str) -> bool {
-        self.native_whitelist_keywords.iter().any(|keyword| {
-            let keyword = normalize_text(keyword);
-            !keyword.is_empty() && text.contains(keyword.as_str())
-        })
-    }
+#[derive(Deserialize)]
+struct DialogModePayload {
+    dialog_id: String,
+    allow_native: bool,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 fn normalize_text(text: &str) -> String {
@@ -285,32 +313,6 @@ fn strip_wake_prefixes(text: &str) -> String {
     }
 
     normalized
-}
-
-fn load_native_whitelist_keywords() -> Vec<String> {
-    let raw = std::env::var("OPEN_XIAOAI_NATIVE_WHITELIST")
-        .ok()
-        .or_else(|| fs::read_to_string(NATIVE_WHITELIST_FILE_PATH).ok())
-        .unwrap_or_else(|| DEFAULT_NATIVE_WHITELIST_KEYWORDS.join(","));
-
-    let keywords = parse_keywords(&raw);
-    if keywords.is_empty() {
-        DEFAULT_NATIVE_WHITELIST_KEYWORDS
-            .iter()
-            .map(|item| item.to_string())
-            .collect()
-    } else {
-        keywords
-    }
-}
-
-fn parse_keywords(raw: &str) -> Vec<String> {
-    raw.replace(['\n', '\r'], ",")
-        .split(',')
-        .map(|item| item.trim())
-        .filter(|item| !item.is_empty())
-        .map(|item| item.to_string())
-        .collect()
 }
 
 fn summarize_script(script: &str) -> String {
@@ -388,6 +390,23 @@ async fn start_recording(request: Request) -> Result<Response, AppError> {
 
 async fn stop_recording(_: Request) -> Result<Response, AppError> {
     AudioRecorder::instance().stop_recording().await?;
+    Ok(Response::success())
+}
+
+async fn set_dialog_mode(request: Request) -> Result<Response, AppError> {
+    let payload = match request.payload {
+        Some(payload) => serde_json::from_value::<DialogModePayload>(payload)?,
+        None => return Err("empty dialog mode payload".into()),
+    };
+
+    let dialog_id = payload.dialog_id.trim();
+    if dialog_id.is_empty() {
+        return Err("dialog_id is required".into());
+    }
+
+    REPLY_SUPPRESSOR
+        .set_dialog_mode(dialog_id, payload.allow_native, payload.text.as_deref())
+        .await;
     Ok(Response::success())
 }
 
