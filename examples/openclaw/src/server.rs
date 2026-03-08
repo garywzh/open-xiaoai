@@ -5,8 +5,6 @@ use open_xiaoai::services::connect::data::{Event, Request, Response, Stream};
 use open_xiaoai::services::connect::handler::MessageHandler;
 use open_xiaoai::services::connect::message::{MessageManager, WsStream};
 use open_xiaoai::services::connect::rpc::RPC;
-use open_xiaoai::services::speaker::SpeakerManager;
-use open_xiaoai::utils::task::TaskManager;
 
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
@@ -15,18 +13,6 @@ use tokio_tungstenite::accept_async;
 use crate::node::NodeManager;
 
 pub struct AppServer;
-
-async fn test() -> Result<(), AppError> {
-    SpeakerManager::play_text("已连接").await?;
-
-    // let _ = RPC::instance()
-    //     .call_remote("start_recording", None, None)
-    //     .await;
-
-    // let _ = RPC::instance().call_remote("start_play", None, None).await;
-
-    Ok(())
-}
 
 impl AppServer {
     pub async fn connect(stream: TcpStream) -> Result<WsStream, AppError> {
@@ -72,17 +58,10 @@ impl AppServer {
 
         let rpc = RPC::instance();
         rpc.add_command("get_version", get_version).await;
-
-        let test = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let _ = test().await;
-        });
-        TaskManager::instance().add("test", test).await;
     }
 
     async fn dispose() {
         MessageManager::instance().dispose().await;
-        TaskManager::instance().dispose("test").await;
     }
 }
 
