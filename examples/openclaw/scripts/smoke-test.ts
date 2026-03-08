@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -35,19 +35,19 @@ async function runRouterChecks(
 ) {
   const router = new BridgeRouter(config.router);
 
-  const weather = router.decide("问问爪爪 今天上海天气怎么样");
+  const weather = router.decide("问问龙虾 今天上海天气怎么样");
   assert.equal(weather.type, "openclaw");
   assert.equal(weather.text, "今天上海天气怎么样");
 
-  const home = router.decide("召唤爪爪 打开客厅灯");
+  const home = router.decide("召唤龙虾 打开客厅灯");
   assert.equal(home.type, "home_control");
   assert.equal(home.text, "打开客厅灯");
 
-  const play = router.decide("请问爪爪 播放 http://127.0.0.1/demo.mp3");
+  const play = router.decide("请问龙虾 播放 http://127.0.0.1/demo.mp3");
   assert.equal(play.type, "play_url_direct");
   assert.equal(play.url, "http://127.0.0.1/demo.mp3");
 
-  const ignore = router.decide(config.router.assistantKeywords[0] ?? "问问爪爪");
+  const ignore = router.decide(config.router.assistantKeywords[0] ?? "问问龙虾");
   assert.equal(ignore.type, "ignore");
 
   console.log("✓ router checks");
@@ -116,7 +116,7 @@ async function runLiveApiChecks(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      text: "问问爪爪 今天上海天气怎么样",
+      text: "问问龙虾 今天上海天气怎么样",
       execute: false,
     }),
   });
@@ -129,3 +129,4 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
+

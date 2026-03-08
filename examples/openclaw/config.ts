@@ -1,6 +1,6 @@
-import type { OpenClawBridgeConfig } from "./openclaw/types.js";
+﻿import type { OpenClawBridgeConfig } from "./openclaw/types.js";
 
-const kDefaultAssistantKeywords = ["问问爪爪", "请问爪爪", "召唤爪爪"];
+const kDefaultAssistantKeywords = ["问问龙虾", "请问龙虾", "召唤龙虾"];
 const kDefaultHomeKeywords = [
   "打开",
   "关闭",
@@ -117,3 +117,4 @@ function envList(name: string, defaultValue: string[], separator = ",") {
     .map((item) => item.trim())
     .filter(Boolean);
 }
+

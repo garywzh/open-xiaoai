@@ -1,4 +1,4 @@
----
+﻿---
 name: xiaoai_bridge
 description: Call a local Open-XiaoAI bridge so OpenClaw can speak through XiaoAI, play audio, inspect bridge status, or hand a command back to native XiaoAI.
 metadata: {"openclaw":{"emoji":"🔊","requires":{"bins":["node"]}}}
@@ -24,7 +24,7 @@ Run the helper with Node:
 
 ```bash
 node {baseDir}/invoke.mjs status
-node {baseDir}/invoke.mjs debug-text "问问爪爪 今天上海天气怎么样"
+node {baseDir}/invoke.mjs debug-text "问问龙虾 今天上海天气怎么样"
 node {baseDir}/invoke.mjs speak "我已经连上局域网桥接服务。"
 node {baseDir}/invoke.mjs play "http://192.168.1.8:4401/media/music/demo.mp3"
 node {baseDir}/invoke.mjs ask-xiaoai "打开客厅灯"
@@ -48,3 +48,4 @@ node {baseDir}/invoke.mjs ask-xiaoai "打开客厅灯"
 - Do not send repeated `speak` requests for the same answer.
 - Do not call `play` with a local filesystem path; use an HTTP URL.
 - If the bridge API is offline, report the failure clearly and stop.
+

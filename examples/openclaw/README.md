@@ -1,4 +1,4 @@
-# Open-XiaoAI x OpenClaw
+﻿# Open-XiaoAI x OpenClaw
 
 让小爱音箱通过局域网桥接到本地部署的 OpenClaw，同时保留原生小爱在语音识别、文字转语音和米家控制上的优势。
 
@@ -175,8 +175,8 @@ examples/openclaw/
 
 当前实现为了避免和原生小爱双重响应，默认只有命中 `assistantKeywords` 前缀的语句才进入桥接逻辑，比如：
 
-- `问问爪爪 今天上海天气怎么样`
-- `召唤爪爪 打开客厅灯`
+- `问问龙虾 今天上海天气怎么样`
+- `召唤龙虾 打开客厅灯`
 
 未命中前缀时，桥接服务会忽略这句识别文本，让原生小爱继续处理。
 
@@ -268,7 +268,7 @@ curl "http://127.0.0.1:4400/api/media/url?file=test.mp3"
 
 curl -X POST http://127.0.0.1:4400/api/debug/text \
   -H 'Content-Type: application/json' \
-  -d '{"text":"问问爪爪 今天上海天气怎么样","execute":false}'
+  -d '{"text":"问问龙虾 今天上海天气怎么样","execute":false}'
 ```
 
 说明：
@@ -283,7 +283,7 @@ curl -X POST http://127.0.0.1:4400/api/debug/text \
 ```bash
 curl -X POST http://127.0.0.1:4400/api/debug/text \
   -H 'Content-Type: application/json' \
-  -d '{"text":"召唤爪爪 打开客厅灯","execute":false}'
+  -d '{"text":"召唤龙虾 打开客厅灯","execute":false}'
 ```
 
 先看返回里的：
@@ -357,7 +357,7 @@ pnpm smoke -- --live
 
 ```bash
 node examples/openclaw/skills/xiaoai-bridge/invoke.mjs status
-node examples/openclaw/skills/xiaoai-bridge/invoke.mjs debug-text "问问爪爪 今天上海天气怎么样"
+node examples/openclaw/skills/xiaoai-bridge/invoke.mjs debug-text "问问龙虾 今天上海天气怎么样"
 node examples/openclaw/skills/xiaoai-bridge/invoke.mjs speak "我已经连上桥接服务。"
 node examples/openclaw/skills/xiaoai-bridge/invoke.mjs ask-xiaoai "打开客厅灯"
 ```
@@ -466,3 +466,4 @@ MP3 需要让音箱能直接访问：
 - OpenClaw OpenAI Chat Completions：<https://docs.openclaw.ai/gateway/openai-http-api>
 - OpenClaw Skills：<https://docs.openclaw.ai/skills>
 - OpenClaw Creating Skills：<https://docs.openclaw.ai/tools/creating-skills>
+
