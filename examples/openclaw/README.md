@@ -1,29 +1,32 @@
 # Open-XiaoAI x OpenClaw
 
-这个示例把 **Root 后的小爱音箱** 接到 **本地 OpenClaw Gateway**，做成一个面向家庭场景的语音助手桥接层。
+这个示例把 **Root 后的小爱音箱** 接到 **本地 OpenClaw Gateway**，做成一个面向家庭场景的语音助手接入层。
 
 它的定位不是“把音箱变成另一台电脑”，而是：
 
 - 大部分自由问答、陪聊、简单知识问答，交给 OpenClaw 里的 `xiaoai` agent
-- 明确的家居控制、闹钟提醒等系统能力，由桥接显式且静默地委托原生小爱
+- 明确的家居控制、闹钟提醒等系统能力，由 gateway 显式且静默地委托原生小爱
 - 本地音频播放、打断、状态查询等能力，通过 OpenClaw 插件工具调用
-- 当工具已经完成动作时，用 `NO_REPLY` 避免桥接再次重复播报
+- 当工具已经完成动作时，用 `NO_REPLY` 避免 gateway 再次重复播报
 
 ## 当前架构
 
-当前推荐方案一共 4 层：
+当前推荐方案一共 5 层：
 
 1. **音箱 Client（Rust）**
-   - 负责连接音箱与桥接服务
+   - 负责连接音箱与 gateway
    - 监听 ASR / 播放事件
    - 在设备侧尽早打断原生小爱的“抢话”回复
-2. **桥接服务（本目录）**
+2. **Gateway（本目录）**
    - 接收音箱事件
-   - 做去重、路由、打断、媒体服务、调试 API
+   - 做去重、路由、打断、设备控制、调试 API
    - 把文本请求转给 OpenClaw
-3. **OpenClaw `xiaoai` agent**
+3. **Media Library Service（本目录）**
+   - 负责媒体匹配、下载、索引、静态资源 URL
+   - 对外提供媒体库 API 与媒体资源服务
+4. **OpenClaw `xiaoai` agent**
    - 通过 `AGENTS.md` / `SOUL.md` / `TOOLS.md` / `USER.md` 定义家庭语音助手行为
-4. **OpenClaw 插件工具**
+5. **OpenClaw 插件工具**
    - 由 `xiaoai-tools-plugin/` 提供可选工具
    - 例如 `xiaoai_interrupt`、`xiaoai_speak`、`xiaoai_device_info`
 
@@ -32,7 +35,7 @@
 - **默认接管自由问答**：更适合家庭问答、儿童场景、短对话
 - **服务端显式路由**：每条有效指令都必须落到 agent 或原生小爱之一
 - **设备侧抢话拦截**：Client 发现原生回复开始播报时，会本地尝试打断
-- **插件工具调用**：`xiaoai` agent 可以主动打断、播报、播放本地音频、查设备信息
+- **插件工具调用**：`xiaoai` agent 可以主动打断、播报、播放媒体 URL、查设备信息
 - **静默收尾**：工具完成动作后，返回 `NO_REPLY`，避免二次播报
 
 ## 隐私与仓库边界
@@ -95,9 +98,11 @@
             "xiaoai_resume",
             "xiaoai_speak",
             "xiaoai_play_url",
-            "xiaoai_list_media",
-            "xiaoai_resolve_media_url",
-            "xiaoai_play_file",
+            "xiaoai_media_status",
+            "xiaoai_media_list",
+            "xiaoai_media_match",
+            "xiaoai_media_ensure",
+            "xiaoai_media_rescan",
             "xiaoai_ask_native",
             "xiaoai_device_info"
           ]
@@ -115,7 +120,8 @@
       "xiaoai-tools": {
         "enabled": true,
         "config": {
-          "bridgeBaseUrl": "http://127.0.0.1:4400",
+          "gatewayBaseUrl": "http://127.0.0.1:4400",
+          "libraryBaseUrl": "http://127.0.0.1:4402",
           "timeoutMs": 10000
         }
       }
@@ -142,7 +148,7 @@ openclaw gateway restart
 openclaw plugins list
 ```
 
-## 第三步：配置桥接服务
+## 第三步：配置 gateway 与媒体服务
 
 复制示例环境文件：
 
@@ -161,21 +167,21 @@ cp .env.example .env
 示例中的默认值已经尽量做成“通用家庭助手”风格：
 
 - 默认 agent：`xiaoai`
-- 默认 session user：`xiaoai-bridge-family`
-- 默认桥接历史：`0`（更推荐直接复用 OpenClaw 侧会话上下文）
+- 默认 session user：`xiaoai-gateway-family`
+- 默认 gateway 历史：`0`（更推荐直接复用 OpenClaw 侧会话上下文）
 
 关于 `OPEN_XIAOAI_ASSISTANT_KEYWORDS`：
 
-- **现在的推荐主流程已经不依赖这组前缀来触发桥接**
-- 日常真实语音链路里，是否交给 agent 或原生小爱，主要取决于 **桥接服务的路由规则**
+- **现在的推荐主流程已经不依赖这组前缀来触发 gateway**
+- 日常真实语音链路里，是否交给 agent 或原生小爱，主要取决于 **gateway 的路由规则**
 - 这个变量现在更适合当作 **兼容选项 / 调试选项**：
   - 你手动调用 `/api/debug/text` 时
   - 你想保留“显式唤起本地助手”的口头前缀时
   - 你需要把前缀从文本里剥掉，再交给 OpenClaw 时
 
-如果你完全不想用这类前缀，也没问题；当前推荐方式就是直接说正常话，让桥接服务决定谁接管。
+如果你完全不想用这类前缀，也没问题；当前推荐方式就是直接说正常话，让 gateway 决定谁接管。
 
-## 第四步：启动桥接服务
+## 第四步：启动 gateway + media library service
 
 ```bash
 cd examples/openclaw
@@ -188,9 +194,10 @@ pnpm start
 
 - `pnpm build` 会编译本示例依赖的 Rust 模块
 - `pnpm start` 会启动：
-  - 音箱桥接服务（默认 `4399`）
-  - 调试 API（默认 `4400`）
-  - 局域网媒体服务（默认 `4401`）
+  - 音箱 gateway（默认 `4399`）
+  - gateway API（默认 `4400`）
+  - 媒体资源服务（默认 `4401`）
+  - 媒体库 API（默认 `4402`）
 
 启动成功后，你应该能看到类似日志：
 
@@ -200,9 +207,9 @@ pnpm start
 
 ## 第五步：按需调整服务端路由
 
-当前推荐方案里，**命令消费方由桥接服务统一决定**：
+当前推荐方案里，**命令消费方由 gateway 统一决定**：
 
-- `home_control`：桥接静默委托原生小爱，避免多余确认播报
+- `home_control`：gateway 静默委托原生小爱，避免多余确认播报
 - `openclaw`：交给 OpenClaw `xiaoai` agent
 - `ignore`：只保留给空文本、纯前缀、无效输入
 
@@ -221,20 +228,29 @@ OPEN_XIAOAI_HOME_PATTERNS=^(打开|关闭|开启|启动).*(灯|空调|窗帘|电
 
 ## 调试 API
 
-桥接服务默认提供本机调试接口：
+本示例默认提供以下本机接口：
 
-- `GET /healthz`
-- `GET /api/status`
-- `GET /api/device`
-- `POST /api/interrupt`
-- `POST /api/pause`
-- `POST /api/resume`
-- `POST /api/speak`
-- `POST /api/play`
-- `POST /api/ask-xiaoai`
-- `POST /api/debug/text`
-- `GET /api/media/list`
-- `GET /api/media/url?file=...`
+- Gateway API `:4400`
+  - `GET /healthz`
+  - `GET /api/status`
+  - `GET /api/device`
+  - `POST /api/interrupt`
+  - `POST /api/pause`
+  - `POST /api/resume`
+  - `POST /api/speak`
+  - `POST /api/play`
+  - `POST /api/ask-xiaoai`
+  - `POST /api/debug/text`
+- Library API `:4402`
+  - `GET /healthz`
+  - `GET /api/library/status`
+  - `GET /api/library/items?query=...&limit=...`
+  - `POST /api/library/match`
+  - `POST /api/library/ensure`
+  - `POST /api/library/rescan`
+- Media Asset API `:4401`
+  - `GET /healthz`
+  - `GET /media/<path>`
 
 ### 常用调试命令
 
@@ -245,7 +261,11 @@ curl http://127.0.0.1:4400/api/status
 
 curl http://127.0.0.1:4400/api/device
 
-curl http://127.0.0.1:4400/api/media/list
+curl http://127.0.0.1:4402/api/library/status
+
+curl -X POST http://127.0.0.1:4402/api/library/match \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"播放许嵩的素颜"}'
 
 curl -X POST http://127.0.0.1:4400/api/debug/text \
   -H 'Content-Type: application/json' \
@@ -267,9 +287,11 @@ curl -X POST http://127.0.0.1:4400/api/debug/text \
 - `xiaoai_resume`
 - `xiaoai_speak`
 - `xiaoai_play_url`
-- `xiaoai_list_media`
-- `xiaoai_resolve_media_url`
-- `xiaoai_play_file`
+- `xiaoai_media_status`
+- `xiaoai_media_list`
+- `xiaoai_media_match`
+- `xiaoai_media_ensure`
+- `xiaoai_media_rescan`
 - `xiaoai_ask_native`
 - `xiaoai_device_info`
 
@@ -288,7 +310,7 @@ curl -X POST http://127.0.0.1:4400/api/debug/text \
 NO_REPLY
 ```
 
-这样桥接层就不会再额外补一段重复播报。
+这样 gateway 就不会再额外补一段重复播报。
 
 ## 故障排查
 
@@ -313,12 +335,12 @@ NO_REPLY
 
 - 音箱上 `client` 是否为最新版本
 - `OPEN_XIAOAI_HOME_KEYWORDS` / `OPEN_XIAOAI_HOME_PATTERNS` 是否写得过宽
-- 桥接日志里是否出现 `prepare_bridge_done`
+- gateway 日志里是否出现 `prepare_gateway_done`
 - Client 日志里是否出现 `dialog_mode_set` / `native_reply_detected` / `local_interrupt_done`
 
-### 3. 已经调用工具，但桥接还重复播报
+### 3. 已经调用工具，但 gateway 还重复播报
 
-先看桥接调试输出：
+先看 gateway 调试输出：
 
 - 是否最终归一化成 `action: "no_reply"`
 - `xiaoai` agent 最后是否真的返回 `NO_REPLY`
@@ -327,14 +349,14 @@ NO_REPLY
 
 当前总耗时通常分为：
 
-- 音箱 ASR 到桥接收到最终文本
-- 桥接发给 OpenClaw 的模型耗时
+- 音箱 ASR 到 gateway 收到最终文本
+- gateway 发给 OpenClaw 的模型耗时
 - 工具执行耗时
 - 音箱播报启动耗时
 
 建议先分别看：
 
-- `examples/openclaw` 桥接日志
+- `examples/openclaw` gateway 日志
 - `openclaw agent --json` 的 `durationMs`
 - 音箱侧 client 日志
 

@@ -1,7 +1,7 @@
 {
   "id": "xiaoai-tools",
   "name": "XiaoAI Tools",
-  "description": "Optional toolset that lets the xiaoai agent control the local XiaoAI bridge.",
+  "description": "Optional toolset that lets the xiaoai agent control the local XiaoAI gateway and media library service.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
@@ -12,18 +12,29 @@
         "default": true,
         "description": "Enable or disable registration of XiaoAI tools."
       },
-      "bridgeBaseUrl": {
+      "gatewayBaseUrl": {
         "type": "string",
         "minLength": 1,
         "default": "http://127.0.0.1:4400",
-        "description": "Base URL for the local XiaoAI bridge debug API."
+        "description": "Base URL for the local XiaoAI gateway API."
+      },
+      "libraryBaseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "default": "http://127.0.0.1:4402",
+        "description": "Base URL for the local media library API."
+      },
+      "bridgeBaseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Legacy alias for gatewayBaseUrl. If libraryBaseUrl is omitted, this value is also used for media calls."
       },
       "timeoutMs": {
         "type": "integer",
         "minimum": 1000,
         "maximum": 60000,
         "default": 10000,
-        "description": "HTTP timeout for bridge tool calls in milliseconds."
+        "description": "HTTP timeout for gateway and media-library tool calls in milliseconds."
       }
     }
   }

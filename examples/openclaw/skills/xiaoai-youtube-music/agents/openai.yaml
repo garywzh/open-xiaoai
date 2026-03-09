@@ -1,0 +1,4 @@
+interface:
+  display_name: "XiaoAI YouTube Music"
+  short_description: "Search YouTube, cache MP3, and play it on XiaoAI"
+  default_prompt: "Use $xiaoai_youtube_music to look up a requested song on YouTube, cache it under the Open-XiaoAI media directory, and play it on the speaker without repeating spoken confirmations."

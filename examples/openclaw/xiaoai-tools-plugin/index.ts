@@ -1,12 +1,21 @@
 const PLUGIN_ID = "xiaoai-tools";
-const DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:4400";
+const DEFAULT_GATEWAY_BASE_URL = "http://127.0.0.1:4400";
+const DEFAULT_LIBRARY_BASE_URL = "http://127.0.0.1:4402";
 const DEFAULT_TIMEOUT_MS = 10000;
 
 function normalizeConfig(pluginConfig: Record<string, unknown> | undefined) {
-  const bridgeBaseUrl =
+  const legacyBridgeBaseUrl =
     typeof pluginConfig?.bridgeBaseUrl === "string" && pluginConfig.bridgeBaseUrl.trim()
       ? pluginConfig.bridgeBaseUrl.trim().replace(/\/$/, "")
-      : DEFAULT_BRIDGE_BASE_URL;
+      : undefined;
+  const gatewayBaseUrl =
+    typeof pluginConfig?.gatewayBaseUrl === "string" && pluginConfig.gatewayBaseUrl.trim()
+      ? pluginConfig.gatewayBaseUrl.trim().replace(/\/$/, "")
+      : legacyBridgeBaseUrl ?? DEFAULT_GATEWAY_BASE_URL;
+  const libraryBaseUrl =
+    typeof pluginConfig?.libraryBaseUrl === "string" && pluginConfig.libraryBaseUrl.trim()
+      ? pluginConfig.libraryBaseUrl.trim().replace(/\/$/, "")
+      : legacyBridgeBaseUrl ?? DEFAULT_LIBRARY_BASE_URL;
 
   const timeoutMsRaw = Number(pluginConfig?.timeoutMs);
   const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw >= 1000
@@ -17,7 +26,8 @@ function normalizeConfig(pluginConfig: Record<string, unknown> | undefined) {
 
   return {
     enabled,
-    bridgeBaseUrl,
+    gatewayBaseUrl,
+    libraryBaseUrl,
     timeoutMs,
   };
 }
@@ -32,6 +42,17 @@ function asOptionalBoolean(value: unknown) {
 
 function asOptionalNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asOptionalStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value
+    .filter((entry) => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return items.length ? items : undefined;
 }
 
 function okResult(payload: Record<string, unknown>) {
@@ -67,17 +88,18 @@ function errorResult(tool: string, error: unknown, extra?: Record<string, unknow
 }
 
 async function requestJson(
-  config: ReturnType<typeof normalizeConfig>,
+  baseUrl: string,
+  timeoutMs: number,
   path: string,
   init?: RequestInit,
 ) {
-  const response = await fetch(`${config.bridgeBaseUrl}${path}`, {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     },
-    signal: AbortSignal.timeout(config.timeoutMs),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   const raw = await response.text();
@@ -87,7 +109,7 @@ async function requestJson(
     const error = new Error(
       typeof json?.error === "string"
         ? json.error
-        : `Bridge HTTP ${response.status}`,
+        : `HTTP ${response.status}`,
     ) as Error & { status?: number; payload?: unknown };
     error.status = response.status;
     error.payload = json;
@@ -116,12 +138,165 @@ export default function register(api: {
   }
 
   registerOptionalTool(api, {
-    name: "xiaoai_status",
-    description: "Get the current local XiaoAI bridge status, including speaker playback state.",
+    name: "xiaoai_media_status",
+    description: "Get local XiaoAI media library status, including index and downloader settings.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
       try {
-        const data = await requestJson(config, "/api/status");
+        const data = await requestJson(config.libraryBaseUrl, config.timeoutMs, "/api/library/status");
+        return okResult({ tool: "xiaoai_media_status", ...data });
+      } catch (error) {
+        return errorResult("xiaoai_media_status", error);
+      }
+    },
+  });
+
+  registerOptionalTool(api, {
+    name: "xiaoai_media_list",
+    description: "List indexed XiaoAI media library items, optionally filtered by a search query.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+    },
+    async execute(_toolCallId: unknown, rawParams: Record<string, unknown>) {
+      const query = asTrimmedString(rawParams?.query);
+      const limit = asOptionalNumber(rawParams?.limit) ?? 50;
+      try {
+        const params = new URLSearchParams();
+        if (query) {
+          params.set("query", query);
+        }
+        params.set("limit", String(limit));
+        const data = await requestJson(
+          config.libraryBaseUrl,
+          config.timeoutMs,
+          `/api/library/items?${params.toString()}`,
+        );
+        return okResult({ tool: "xiaoai_media_list", query: query || undefined, ...data });
+      } catch (error) {
+        return errorResult("xiaoai_media_list", error, { query: query || undefined });
+      }
+    },
+  });
+
+  registerOptionalTool(api, {
+    name: "xiaoai_media_match",
+    description: "Match a user request against the local XiaoAI media library before downloading anything.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 20 },
+      },
+      required: ["query"],
+    },
+    async execute(_toolCallId: unknown, rawParams: Record<string, unknown>) {
+      const query = asTrimmedString(rawParams?.query);
+      const limit = asOptionalNumber(rawParams?.limit) ?? 5;
+      if (!query) {
+        return errorResult("xiaoai_media_match", new Error("query is required"));
+      }
+      try {
+        const data = await requestJson(config.libraryBaseUrl, config.timeoutMs, "/api/library/match", {
+          method: "POST",
+          body: JSON.stringify({ query, limit }),
+        });
+        return okResult({ tool: "xiaoai_media_match", query, ...data });
+      } catch (error) {
+        return errorResult("xiaoai_media_match", error, { query });
+      }
+    },
+  });
+
+  registerOptionalTool(api, {
+    name: "xiaoai_media_ensure",
+    description: "Ensure a requested track exists in the local XiaoAI media library; return a cached file or download one from a source URL.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", minLength: 1 },
+        sourceUrl: { type: "string", minLength: 1 },
+        title: { type: "string" },
+        artist: { type: "string" },
+        aliases: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          maxItems: 12,
+        },
+      },
+      required: ["query"],
+    },
+    async execute(_toolCallId: unknown, rawParams: Record<string, unknown>) {
+      const query = asTrimmedString(rawParams?.query);
+      const sourceUrl = asTrimmedString(rawParams?.sourceUrl);
+      const title = asTrimmedString(rawParams?.title);
+      const artist = asTrimmedString(rawParams?.artist);
+      const aliases = asOptionalStringArray(rawParams?.aliases);
+      if (!query) {
+        return errorResult("xiaoai_media_ensure", new Error("query is required"));
+      }
+      try {
+        const data = await requestJson(config.libraryBaseUrl, config.timeoutMs, "/api/library/ensure", {
+          method: "POST",
+          body: JSON.stringify({
+            query,
+            sourceUrl: sourceUrl || undefined,
+            title: title || undefined,
+            artist: artist || undefined,
+            aliases,
+          }),
+        });
+        return okResult({
+          tool: "xiaoai_media_ensure",
+          query,
+          sourceUrl: sourceUrl || undefined,
+          title: title || undefined,
+          artist: artist || undefined,
+          aliases,
+          ...data,
+        });
+      } catch (error) {
+        return errorResult("xiaoai_media_ensure", error, {
+          query,
+          sourceUrl: sourceUrl || undefined,
+          title: title || undefined,
+          artist: artist || undefined,
+          aliases,
+        });
+      }
+    },
+  });
+
+  registerOptionalTool(api, {
+    name: "xiaoai_media_rescan",
+    description: "Rescan the local media asset root and refresh the media library index.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    async execute() {
+      try {
+        const data = await requestJson(config.libraryBaseUrl, config.timeoutMs, "/api/library/rescan", {
+          method: "POST",
+          body: "{}",
+        });
+        return okResult({ tool: "xiaoai_media_rescan", ...data });
+      } catch (error) {
+        return errorResult("xiaoai_media_rescan", error);
+      }
+    },
+  });
+
+  registerOptionalTool(api, {
+    name: "xiaoai_status",
+    description: "Get the current local XiaoAI gateway status, including speaker playback state.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    async execute() {
+      try {
+        const data = await requestJson(config.gatewayBaseUrl, config.timeoutMs, "/api/status");
         return okResult({ tool: "xiaoai_status", ...data });
       } catch (error) {
         return errorResult("xiaoai_status", error);
@@ -135,7 +310,12 @@ export default function register(api: {
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
       try {
-        const data = await requestJson(config, "/api/interrupt", { method: "POST", body: "{}" });
+        const data = await requestJson(
+          config.gatewayBaseUrl,
+          config.timeoutMs,
+          "/api/interrupt",
+          { method: "POST", body: "{}" },
+        );
         return okResult({ tool: "xiaoai_interrupt", ...data });
       } catch (error) {
         return errorResult("xiaoai_interrupt", error);
@@ -149,7 +329,12 @@ export default function register(api: {
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
       try {
-        const data = await requestJson(config, "/api/pause", { method: "POST", body: "{}" });
+        const data = await requestJson(
+          config.gatewayBaseUrl,
+          config.timeoutMs,
+          "/api/pause",
+          { method: "POST", body: "{}" },
+        );
         return okResult({ tool: "xiaoai_pause", ...data });
       } catch (error) {
         return errorResult("xiaoai_pause", error);
@@ -163,7 +348,12 @@ export default function register(api: {
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
       try {
-        const data = await requestJson(config, "/api/resume", { method: "POST", body: "{}" });
+        const data = await requestJson(
+          config.gatewayBaseUrl,
+          config.timeoutMs,
+          "/api/resume",
+          { method: "POST", body: "{}" },
+        );
         return okResult({ tool: "xiaoai_resume", ...data });
       } catch (error) {
         return errorResult("xiaoai_resume", error);
@@ -173,7 +363,7 @@ export default function register(api: {
 
   registerOptionalTool(api, {
     name: "xiaoai_speak",
-    description: "Speak a short text through the local XiaoAI bridge TTS.",
+    description: "Speak a short text through the local XiaoAI gateway TTS.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -188,7 +378,7 @@ export default function register(api: {
         return errorResult("xiaoai_speak", new Error("text is required"));
       }
       try {
-        const data = await requestJson(config, "/api/speak", {
+        const data = await requestJson(config.gatewayBaseUrl, config.timeoutMs, "/api/speak", {
           method: "POST",
           body: JSON.stringify({ text }),
         });
@@ -201,7 +391,7 @@ export default function register(api: {
 
   registerOptionalTool(api, {
     name: "xiaoai_play_url",
-    description: "Play a remote audio URL through the local XiaoAI bridge.",
+    description: "Play a remote audio URL through the local XiaoAI gateway.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -216,110 +406,13 @@ export default function register(api: {
         return errorResult("xiaoai_play_url", new Error("url is required"));
       }
       try {
-        const data = await requestJson(config, "/api/play", {
+        const data = await requestJson(config.gatewayBaseUrl, config.timeoutMs, "/api/play", {
           method: "POST",
           body: JSON.stringify({ url }),
         });
         return okResult({ tool: "xiaoai_play_url", url, ...data });
       } catch (error) {
         return errorResult("xiaoai_play_url", error, { url });
-      }
-    },
-  });
-
-  registerOptionalTool(api, {
-    name: "xiaoai_list_media",
-    description: "List local media files that the XiaoAI bridge can play.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        pattern: { type: "string" },
-        limit: { type: "integer", minimum: 1, maximum: 200 },
-      },
-    },
-    async execute(_toolCallId: unknown, rawParams: Record<string, unknown>) {
-      const pattern = asTrimmedString(rawParams?.pattern).toLowerCase();
-      const limit = asOptionalNumber(rawParams?.limit) ?? 50;
-      try {
-        const data = await requestJson(config, "/api/media/list");
-        const rawFiles = Array.isArray(data.files) ? data.files : [];
-        const files = rawFiles
-          .filter((entry) => typeof entry === "string")
-          .filter((entry) => !pattern || entry.toLowerCase().includes(pattern))
-          .slice(0, limit);
-        return okResult({
-          tool: "xiaoai_list_media",
-          pattern: pattern || undefined,
-          total: rawFiles.length,
-          returned: files.length,
-          files,
-        });
-      } catch (error) {
-        return errorResult("xiaoai_list_media", error, { pattern: pattern || undefined });
-      }
-    },
-  });
-
-  registerOptionalTool(api, {
-    name: "xiaoai_resolve_media_url",
-    description: "Resolve a local bridge media file to its playable URL.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        file: { type: "string", minLength: 1 },
-      },
-      required: ["file"],
-    },
-    async execute(_toolCallId: unknown, rawParams: Record<string, unknown>) {
-      const file = asTrimmedString(rawParams?.file);
-      if (!file) {
-        return errorResult("xiaoai_resolve_media_url", new Error("file is required"));
-      }
-      try {
-        const data = await requestJson(config, `/api/media/url?file=${encodeURIComponent(file)}`);
-        return okResult({ tool: "xiaoai_resolve_media_url", ...data });
-      } catch (error) {
-        return errorResult("xiaoai_resolve_media_url", error, { file });
-      }
-    },
-  });
-
-  registerOptionalTool(api, {
-    name: "xiaoai_play_file",
-    description: "Play a local bridge media file by name.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        file: { type: "string", minLength: 1 },
-      },
-      required: ["file"],
-    },
-    async execute(_toolCallId: unknown, rawParams: Record<string, unknown>) {
-      const file = asTrimmedString(rawParams?.file);
-      if (!file) {
-        return errorResult("xiaoai_play_file", new Error("file is required"));
-      }
-      try {
-        const resolved = await requestJson(config, `/api/media/url?file=${encodeURIComponent(file)}`);
-        const url = asTrimmedString(resolved.url);
-        if (!url) {
-          throw new Error("bridge did not return a playable url");
-        }
-        const played = await requestJson(config, "/api/play", {
-          method: "POST",
-          body: JSON.stringify({ url }),
-        });
-        return okResult({
-          tool: "xiaoai_play_file",
-          file: asTrimmedString(resolved.file) || file,
-          url,
-          ...played,
-        });
-      } catch (error) {
-        return errorResult("xiaoai_play_file", error, { file });
       }
     },
   });
@@ -343,7 +436,7 @@ export default function register(api: {
         return errorResult("xiaoai_ask_native", new Error("text is required"));
       }
       try {
-        const data = await requestJson(config, "/api/ask-xiaoai", {
+        const data = await requestJson(config.gatewayBaseUrl, config.timeoutMs, "/api/ask-xiaoai", {
           method: "POST",
           body: JSON.stringify({ text, silent }),
         });
@@ -360,7 +453,7 @@ export default function register(api: {
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
       try {
-        const data = await requestJson(config, "/api/device");
+        const data = await requestJson(config.gatewayBaseUrl, config.timeoutMs, "/api/device");
         return okResult({ tool: "xiaoai_device_info", ...data });
       } catch (error) {
         return errorResult("xiaoai_device_info", error);
@@ -368,5 +461,5 @@ export default function register(api: {
     },
   });
 
-  api.logger?.info?.(`${PLUGIN_ID}: registered optional XiaoAI bridge tools`);
+  api.logger?.info?.(`${PLUGIN_ID}: registered optional XiaoAI gateway tools`);
 }

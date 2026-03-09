@@ -9,6 +9,7 @@ import {
   resolveMediaFileURL,
   resolveMediaRoot,
 } from "../openclaw/media.js";
+import { OpenXiaoAIMediaLibrary } from "../openclaw/media-library.js";
 import { OpenClawClient } from "../openclaw/openclaw-client.js";
 import { BridgeRouter } from "../openclaw/router.js";
 
@@ -21,6 +22,7 @@ async function main() {
 
   await runRouterChecks(kOpenXiaoAIConfig);
   await runMediaChecks(kOpenXiaoAIConfig);
+  await runMediaLibraryChecks(kOpenXiaoAIConfig);
   runActionChecks(kOpenXiaoAIConfig);
 
   if (runLiveChecks) {
@@ -33,8 +35,8 @@ async function main() {
 async function runRouterChecks(
   config: Awaited<typeof import("../config.js")>["kOpenXiaoAIConfig"],
 ) {
-  const router = new BridgeRouter(config.router);
-  const prefix = config.router.assistantKeywords[0] ?? "请";
+  const router = new BridgeRouter(config.gateway.router);
+  const prefix = config.gateway.router.assistantKeywords[0] ?? "请";
 
   const weather = router.decide(`${prefix} 今天上海天气怎么样`);
   assert.equal(weather.type, "openclaw");
@@ -68,7 +70,7 @@ async function runMediaChecks(
     await writeFile(path.join(tempRoot, "music", "demo.mp3"), Buffer.from("ID3"));
 
     const mediaConfig = {
-      ...config.media,
+      ...config.mediaLibraryService.media,
       rootDir: tempRoot,
       publicOrigin: "http://192.168.1.8:4401",
     };
@@ -86,10 +88,48 @@ async function runMediaChecks(
   }
 }
 
+async function runMediaLibraryChecks(
+  config: Awaited<typeof import("../config.js")>["kOpenXiaoAIConfig"],
+) {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-library-"));
+
+  try {
+    await mkdir(path.join(tempRoot, "music", "library"), { recursive: true });
+    await writeFile(path.join(tempRoot, "music", "library", "许嵩-素颜-demo.mp3"), Buffer.from("ID3"));
+
+    const mediaConfig = {
+      ...config.mediaLibraryService.media,
+      rootDir: tempRoot,
+      publicOrigin: "http://192.168.1.8:4401",
+    };
+    const libraryConfig = {
+      ...config.mediaLibraryService.library,
+      apiPort: 4402,
+    };
+    const library = new OpenXiaoAIMediaLibrary(mediaConfig, libraryConfig);
+
+    const status = await library.getStatus();
+    assert.equal(status.ok, true);
+    assert.equal(status.rootDir, tempRoot);
+
+    const match = await library.match("播放许嵩素颜");
+    assert.equal(match.status, "hit");
+    assert.equal(match.items[0]?.file, "music/library/许嵩-素颜-demo.mp3");
+
+    const ensure = await library.ensure({ query: "播放许嵩素颜" });
+    assert.equal(ensure.status, "ready");
+    assert.equal(ensure.cached, true);
+
+    console.log("✓ media library checks");
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 function runActionChecks(
   config: Awaited<typeof import("../config.js")>["kOpenXiaoAIConfig"],
 ) {
-  const client = new OpenClawClient(config.openclaw);
+  const client = new OpenClawClient(config.gateway.openclaw);
 
   assert.deepEqual(client.normalizeAction('{"action":"reply_text","text":"你好"}'), {
     action: "reply_text",
@@ -113,7 +153,8 @@ function runActionChecks(
 async function runLiveApiChecks(
   config: Awaited<typeof import("../config.js")>["kOpenXiaoAIConfig"],
 ) {
-  const baseURL = process.env.OPEN_XIAOAI_DEBUG_BASE_URL?.trim() || `http://127.0.0.1:${config.server.debugPort}`;
+  const baseURL = process.env.OPEN_XIAOAI_DEBUG_BASE_URL?.trim()
+    || `http://127.0.0.1:${config.gateway.server.debugPort}`;
 
   const health = await fetch(`${baseURL}/healthz`);
   assert.equal(health.ok, true, `healthz failed: ${health.status}`);
@@ -124,7 +165,7 @@ async function runLiveApiChecks(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      text: `${config.router.assistantKeywords[0] ?? "请"} 今天上海天气怎么样`,
+      text: `${config.gateway.router.assistantKeywords[0] ?? "请"} 今天上海天气怎么样`,
       execute: false,
     }),
   });

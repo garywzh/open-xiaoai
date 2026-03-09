@@ -1,9 +1,9 @@
-import type { BridgeAction, OpenClawBridgeConfig, RouteDecision } from "./types.js";
+import type { GatewayAction, RouteDecision, XiaoAIGatewayConfig } from "./types.js";
 
-export class BridgeRouter {
+export class GatewayRouter {
   private readonly homePatterns: RegExp[];
 
-  constructor(private readonly config: OpenClawBridgeConfig["router"]) {
+  constructor(private readonly config: XiaoAIGatewayConfig["router"]) {
     this.homePatterns = compilePatterns(config.homePatterns);
   }
 
@@ -44,7 +44,7 @@ export class BridgeRouter {
     return Date.now() - previousAt < this.config.dedupeWindowMs;
   }
 
-  normalizeFallbackAction(text: string): BridgeAction {
+  normalizeFallbackAction(text: string): GatewayAction {
     return {
       action: "reply_text",
       text,
@@ -77,6 +77,8 @@ export class BridgeRouter {
     return text;
   }
 }
+
+export const BridgeRouter = GatewayRouter;
 
 function compilePatterns(patterns: string[]) {
   return patterns

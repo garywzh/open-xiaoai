@@ -3,7 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 
-import type { OpenClawBridgeConfig } from "./types.js";
+import type { XiaoAIMediaAssetConfig } from "./types.js";
 
 const CONTENT_TYPES = new Map<string, string>([
   [".mp3", "audio/mpeg"],
@@ -14,11 +14,11 @@ const CONTENT_TYPES = new Map<string, string>([
   [".ogg", "audio/ogg"],
 ]);
 
-export function resolveMediaRoot(config: OpenClawBridgeConfig["media"]) {
+export function resolveMediaRoot(config: XiaoAIMediaAssetConfig) {
   return path.resolve(process.cwd(), config.rootDir);
 }
 
-export function resolveMediaFilePath(config: OpenClawBridgeConfig["media"], file: string) {
+export function resolveMediaFilePath(config: XiaoAIMediaAssetConfig, file: string) {
   const rootDir = resolveMediaRoot(config);
   const safeRelativePath = path.normalize(file).replace(/^([.]{2}[\\/])+/, "");
   const absolutePath = path.resolve(rootDir, safeRelativePath);
@@ -34,7 +34,7 @@ export function resolveMediaFilePath(config: OpenClawBridgeConfig["media"], file
   };
 }
 
-export function resolveMediaBaseURL(config: OpenClawBridgeConfig["media"]) {
+export function resolveMediaBaseURL(config: XiaoAIMediaAssetConfig) {
   if (config.publicOrigin?.trim()) {
     return config.publicOrigin.replace(/\/$/, "");
   }
@@ -43,7 +43,7 @@ export function resolveMediaBaseURL(config: OpenClawBridgeConfig["media"]) {
   return `http://${ip}:${config.port}`;
 }
 
-export function resolveMediaFileURL(config: OpenClawBridgeConfig["media"], file: string) {
+export function resolveMediaFileURL(config: XiaoAIMediaAssetConfig, file: string) {
   const { relativePath } = resolveMediaFilePath(config, file);
   const encodedPath = relativePath
     .split("/")
@@ -68,7 +68,7 @@ export function getContentType(filePath: string) {
   return CONTENT_TYPES.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream";
 }
 
-export async function listMediaFiles(config: OpenClawBridgeConfig["media"]) {
+export async function listMediaFiles(config: XiaoAIMediaAssetConfig) {
   const rootDir = resolveMediaRoot(config);
   return walkMediaDirectory(rootDir, rootDir);
 }
@@ -95,7 +95,7 @@ async function walkMediaDirectory(rootDir: string, currentDir: string): Promise<
   return files.sort();
 }
 
-export async function ensureMediaFileReadable(config: OpenClawBridgeConfig["media"], file: string) {
+export async function ensureMediaFileReadable(config: XiaoAIMediaAssetConfig, file: string) {
   const resolved = resolveMediaFilePath(config, file);
   const fileStat = await stat(resolved.absolutePath);
   if (!fileStat.isFile()) {

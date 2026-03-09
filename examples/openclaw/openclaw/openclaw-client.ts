@@ -1,14 +1,14 @@
 import type {
-  BridgeAction,
-  BridgeMessage,
+  GatewayAction,
+  GatewayMessage,
   OpenAIChatCompletionResponse,
-  OpenClawBridgeConfig,
+  XiaoAIGatewayConfig,
 } from "./types.js";
 
 export class OpenClawClient {
-  constructor(private readonly config: OpenClawBridgeConfig["openclaw"]) {}
+  constructor(private readonly config: XiaoAIGatewayConfig["openclaw"]) {}
 
-  async chat(messages: BridgeMessage[]): Promise<string> {
+  async chat(messages: GatewayMessage[]): Promise<string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...(this.config.extraHeaders ?? {}),
@@ -66,14 +66,14 @@ export class OpenClawClient {
     return text;
   }
 
-  normalizeAction(reply: string): BridgeAction {
+  normalizeAction(reply: string): GatewayAction {
     const raw = unwrapJsonCodeFence(reply);
     if (isNoReplyToken(raw)) {
       return { action: "no_reply" };
     }
 
     try {
-      const parsed = JSON.parse(raw) as Partial<BridgeAction>;
+      const parsed = JSON.parse(raw) as Partial<GatewayAction>;
       if (parsed.action === "no_reply") {
         return { action: "no_reply" };
       }

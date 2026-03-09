@@ -17,13 +17,14 @@ async function main() {
 
   const { kOpenXiaoAIConfig } = await import("../config.js");
   const [modeOrFile, maybeFile] = process.argv.slice(2);
+  const mediaConfig = kOpenXiaoAIConfig.mediaLibraryService.media;
 
-  console.log(`Media Root: ${resolveMediaRoot(kOpenXiaoAIConfig.media)}`);
+  console.log(`Media Root: ${resolveMediaRoot(mediaConfig)}`);
   console.log(`Detected LAN IP: ${detectLanIPv4()}`);
-  console.log(`Media Base URL: ${resolveMediaBaseURL(kOpenXiaoAIConfig.media)}`);
+  console.log(`Media Base URL: ${resolveMediaBaseURL(mediaConfig)}`);
 
   if (!modeOrFile || modeOrFile === "--list") {
-    const files = await listMediaFiles(kOpenXiaoAIConfig.media);
+    const files = await listMediaFiles(mediaConfig);
     if (!files.length) {
       console.log("No media files found.");
       return;
@@ -42,7 +43,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Resolved URL: ${resolveMediaFileURL(kOpenXiaoAIConfig.media, file)}`);
+  console.log(`Resolved URL: ${resolveMediaFileURL(mediaConfig, file)}`);
 }
 
 main().catch((error) => {
